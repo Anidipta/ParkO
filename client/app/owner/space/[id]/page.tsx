@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, MapPin, Users, AlertCircle } from "lucide-react"
@@ -17,6 +17,12 @@ interface Slot {
 export default function SpaceManagement() {
   const params = useParams()
   const [selectedTab, setSelectedTab] = useState<"overview" | "slots" | "managers">("overview")
+  const [showInviteForm, setShowInviteForm] = useState(false)
+  const [inviteName, setInviteName] = useState('')
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [invitePhone, setInvitePhone] = useState('')
+  const [inviteUrl, setInviteUrl] = useState('')
+  const [managers, setManagers] = useState<any[]>([])
   const [editRate, setEditRate] = useState(false)
   const [rate, setRate] = useState("60")
 
@@ -46,6 +52,62 @@ export default function SpaceManagement() {
 
   const availableSlots = slots.filter((s) => s.status === "available").length
   const maintenanceSlots = slots.filter((s) => s.status === "maintenance").length
+
+  async function doInvite() {
+    if (!inviteEmail) return alert('Enter email')
+    try {
+      const owner = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
+      const res = await fetch('/api/owners/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ space_id: params.id, name: inviteName, email: inviteEmail, phone: invitePhone, assigned_by: owner?.user_id }) })
+      const j = await res.json()
+      if (!res.ok) throw new Error(j.error || 'Invite failed')
+      setInviteUrl(j.invite_url)
+      setShowInviteForm(false)
+      loadManagers()
+    } catch (err: any) {
+      alert(err.message || 'Invite failed')
+    }
+  }
+
+  async function loadManagers() {
+    try {
+      const res = await fetch(`/api/owners/managers?space_id=${params.id}`)
+      const j = await res.json()
+      setManagers(j.data ?? [])
+    } catch (err) {
+      console.warn(err)
+    }
+  }
+
+  // load managers on tab open
+  useEffect(() => { if (selectedTab === 'managers') loadManagers() }, [selectedTab])
+
+  // subscribe to slot availability via SSE when on overview tab
+  useEffect(() => {
+    let es: EventSource | null = null
+    if (selectedTab === 'overview') {
+      try {
+        es = new EventSource(`/api/slots/stream?space_id=${params.id}`)
+        es.onmessage = (ev) => {
+          try {
+            const parsed = JSON.parse(ev.data)
+            const avail = (parsed.slots || []).filter((s: any) => s.is_available).length
+            // update small availability UI (local state)
+            // we don't want to replace the whole slots grid mock, just update managers count placeholder
+            // For demo: update managers count to show availability (temporary repurpose)
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            const el = document.querySelector('[data-live-available]')
+            if (el) el.textContent = String(avail)
+          } catch (e) {
+            // ignore
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    }
+    return () => { if (es) es.close() }
+  }, [selectedTab, params.id])
 
   return (
     <main className="min-h-screen bg-background">
@@ -236,23 +298,42 @@ export default function SpaceManagement() {
             <div className="bg-card border border-border rounded-lg p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-foreground">Current Managers</h3>
-                <Button size="sm" className="gap-2">
+                <Button size="sm" className="gap-2" onClick={() => setShowInviteForm(s => !s)}>
                   <Users className="w-4 h-4" />
                   Add Manager
                 </Button>
               </div>
 
+              {showInviteForm && (
+                <div className="p-4 bg-muted rounded-lg">
+                  <div className="grid grid-cols-1 gap-2">
+                    <input placeholder="Name" value={inviteName} onChange={(e) => setInviteName(e.target.value)} className="p-2 border rounded" />
+                    <input placeholder="Email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} className="p-2 border rounded" />
+                    <input placeholder="Phone" value={invitePhone} onChange={(e) => setInvitePhone(e.target.value)} className="p-2 border rounded" />
+                    <div className="flex gap-2">
+                      <Button onClick={() => doInvite()} className="flex-1">Send Invite</Button>
+                      <Button variant="outline" onClick={() => setShowInviteForm(false)} className="flex-1">Cancel</Button>
+                    </div>
+                    {inviteUrl && (
+                      <div className="text-sm text-muted-foreground">Invite Link: <a href={inviteUrl} className="text-primary underline">{inviteUrl}</a></div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-2">
+                <Button size="sm" variant="ghost" onClick={() => loadManagers()}>Refresh</Button>
+              </div>
+
               <div className="space-y-2">
-                {[
-                  { name: "Raj Kumar", email: "raj@manager.com", status: "Active" },
-                  { name: "Priya Singh", email: "priya@manager.com", status: "Active" },
-                ].map((manager, i) => (
+                {managers.map((m: any, i: number) => (
                   <div key={i} className="p-4 bg-muted rounded-lg flex items-center justify-between">
                     <div>
-                      <p className="font-semibold text-foreground text-sm">{manager.name}</p>
-                      <p className="text-xs text-muted-foreground">{manager.email}</p>
+                      <p className="font-semibold text-foreground text-sm">{m.users?.full_name ?? 'Invitee'}</p>
+                      <p className="text-xs text-muted-foreground">{m.users?.email ?? '—'}</p>
+                      <p className="text-xs text-muted-foreground">Status: {m.invite_status}</p>
                     </div>
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">{manager.status}</span>
+                    <span className={`text-xs px-2 py-1 rounded ${m.invite_status === 'accepted' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{m.invite_status}</span>
                   </div>
                 ))}
               </div>

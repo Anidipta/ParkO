@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
 import Link from "next/link"
 import { ArrowLeft, Upload, Check, AlertCircle } from "lucide-react"
@@ -15,10 +16,10 @@ interface DocumentUpload {
 
 export default function DriverVerification() {
   const [profileCompletion, setProfileCompletion] = useState(20)
-  const [documents, setDocuments] = useState<DocumentUpload[]>([
-    { type: "license", file: null, preview: null, extracted: "DL1234567890" },
-    { type: "plate", file: null, preview: null, extracted: "MH02AB1234" },
-    { type: "pan", file: null, preview: null, extracted: "ABCDE1234F" },
+  const [documents, setDocuments] = useState<DocumentUpload[]>([ // randomized placeholders
+    { type: "license", file: null, preview: null, extracted: `DL${Math.floor(100000 + Math.random() * 900000)}` },
+    { type: "plate", file: null, preview: null, extracted: `MH${String(Math.floor(10 + Math.random() * 90)).padStart(2, '0')}AB${Math.floor(1000 + Math.random() * 9000)}` },
+    { type: "pan", file: null, preview: null, extracted: `ABCDE${Math.floor(1000 + Math.random() * 9000)}F` },
   ])
   const [verificationStep, setVerificationStep] = useState<"upload" | "review" | "complete">("upload")
 
@@ -78,45 +79,80 @@ export default function DriverVerification() {
     setUsingCameraFor(null)
   }
 
-  const allUploaded = documents.every((doc) => doc.file)
+  const allUploaded = documents.every((doc) => doc.file || doc.preview)
 
-  const handleSubmitDocuments = () => {
-    if (allUploaded) {
-      // send documents to server for storing and profile update
-      const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
+  const router = useRouter()
 
-      const payload = {
-        user_id: user?.user_id,
-        documents: documents.map((d) => ({ type: d.type, extracted: d.extracted, b64: d.preview })),
+  async function fileToDataUrl(file: File) {
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = (e) => reject(e)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const handleSubmitDocuments = async () => {
+    if (!allUploaded) return
+
+    // ensure user is present (server session required)
+    let userId: string | null = null
+    try {
+      const sess = await fetch('/api/auth/session').then(r => r.ok ? r.json() : null).catch(() => null)
+      userId = sess?.user?.userId ?? sess?.user?.user_id ?? null
+    } catch {}
+    if (!userId) {
+      // require sign up/login before uploading documents
+      window.alert('Please sign in or create an account before uploading documents')
+      router.push('/driver/signup')
+      return
+    }
+
+    try {
+      // prepare documents with base64 strings
+      const docs = await Promise.all(
+        documents.map(async (d) => {
+          let b64 = d.preview
+          if (!b64 && d.file) {
+            b64 = await fileToDataUrl(d.file)
+          }
+          return { type: d.type, extracted: d.extracted, b64 }
+        }),
+      )
+
+      const payload = { user_id: userId, documents: docs }
+      const res = await fetch('/api/users/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        throw new Error(json?.error || `Upload failed with status ${res.status}`)
       }
 
-      fetch('/api/users/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-        .then((r) => r.json())
-        .then(() => {
-          setVerificationStep('review')
-          setProfileCompletion(60)
-        })
-        .catch(() => {
-          // fall back to client-only state
-          setVerificationStep('review')
-          setProfileCompletion(60)
-        })
+      setVerificationStep('review')
+      setProfileCompletion(60)
+    } catch (err) {
+      console.warn('profile upload failed', err)
+      // fall back to client-only state so user can continue
+      setVerificationStep('review')
+      setProfileCompletion(60)
     }
   }
 
-  const handleConfirmVerification = () => {
-    const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
-    if (user?.user_id) {
-      fetch('/api/users/profile/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: user.user_id }) })
-        .then(() => {
-          setVerificationStep('complete')
-          setProfileCompletion(100)
-        })
-        .catch(() => {
-          setVerificationStep('complete')
-          setProfileCompletion(100)
-        })
-    } else {
+  const handleConfirmVerification = async () => {
+    let userId: string | null = null
+    try {
+      const sess = await fetch('/api/auth/session').then(r => r.ok ? r.json() : null).catch(() => null)
+      userId = (sess?.user?.userId ?? sess?.user?.user_id) ?? null
+    } catch {}
+    if (!userId) {
+      window.alert('Please sign in before confirming verification')
+      router.push('/driver/login')
+      return
+    }
+    try {
+      await fetch('/api/users/profile/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }) })
+    } catch (e) {
+      console.warn('verify API failed', e)
+    } finally {
       setVerificationStep('complete')
       setProfileCompletion(100)
     }

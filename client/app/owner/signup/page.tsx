@@ -4,7 +4,9 @@ import type React from "react"
 
 import { useState } from "react"
 import Link from "next/link"
-import { ArrowLeft, MapPin } from "lucide-react"
+import { useRouter } from "next/navigation"
+import Image from 'next/image'
+import { ArrowLeft, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -16,16 +18,122 @@ export default function OwnerSignup() {
     phone: "",
     password: "",
     confirmPassword: "",
-    location: "Current Location",
   })
+  const [error, setError] = useState("")
+  const [loading, setLoading] = useState(false)
+  const router = useRouter()
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({ ...prev, [name]: value }))
+    setError("")
+  }
+
+  const validateStep1 = () => {
+    if (!formData.name.trim()) {
+      setError("Business/Full name is required")
+      return false
+    }
+    if (formData.name.trim().length < 2) {
+      setError("Name must be at least 2 characters")
+      return false
+    }
+    if (!formData.email.trim()) {
+      setError("Email is required")
+      return false
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(formData.email)) {
+      setError("Please enter a valid email address")
+      return false
+    }
+    return true
+  }
+
+  const validateStep2 = () => {
+    if (formData.phone && formData.phone.trim()) {
+      const phoneRegex = /^[+]?[0-9]{10,15}$/
+      if (!phoneRegex.test(formData.phone.replace(/[\s()-]/g, ''))) {
+        setError("Please enter a valid phone number (10-15 digits)")
+        return false
+      }
+    }
+    return true
+  }
+
+  const validateStep3 = () => {
+    if (!formData.password) {
+      setError("Password is required")
+      return false
+    }
+    if (formData.password.length < 8) {
+      setError("Password must be at least 8 characters long")
+      return false
+    }
+    if (!/[A-Z]/.test(formData.password)) {
+      setError("Password must contain at least one uppercase letter")
+      return false
+    }
+    if (!/[a-z]/.test(formData.password)) {
+      setError("Password must contain at least one lowercase letter")
+      return false
+    }
+    if (!/[0-9]/.test(formData.password)) {
+      setError("Password must contain at least one number")
+      return false
+    }
+    if (formData.password !== formData.confirmPassword) {
+      setError("Passwords do not match")
+      return false
+    }
+    return true
   }
 
   const handleNext = () => {
+    if (step === 1 && !validateStep1()) return
+    if (step === 2 && !validateStep2()) return
     if (step < 3) setStep(step + 1)
+  }
+
+  const handleBack = () => {
+    if (step > 1) {
+      setStep(step - 1)
+      setError("")
+    }
+  }
+
+  const handleComplete = async () => {
+    if (!validateStep3()) return
+
+    setLoading(true)
+    setError("")
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: formData.email,
+          password: formData.password,
+          fullName: formData.name,
+          phone: formData.phone || undefined,
+          userType: 'owner'
+        }),
+      })
+
+      const json = await res.json()
+
+      if (!res.ok) {
+        throw new Error(json.error || 'Failed to register')
+      }
+
+      // Navigate to owner dashboard (session is in cookie)
+      router.push('/owner/dashboard')
+    } catch (err: any) {
+      setError(err.message || 'Registration failed. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -42,121 +150,89 @@ export default function OwnerSignup() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-2xl px-4 py-12">
-        <div className="bg-card border border-border rounded-xl p-8">
-          <h1 className="text-3xl font-bold text-foreground mb-2">Parking Owner Registration</h1>
-          <p className="text-muted-foreground mb-8">Step {step} of 3</p>
-
-          <div className="flex gap-2 mb-8">
-            {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className={`h-1 flex-1 rounded-full transition-colors ${i <= step ? "bg-secondary" : "bg-border"}`}
-              />
-            ))}
+      <div className="mx-auto max-w-4xl px-4 py-12">
+        <div className="bg-card border border-border rounded-xl p-6 grid md:grid-cols-2 gap-6 items-stretch">
+          <div className="hidden md:flex flex-col items-center justify-center gap-6 p-6">
+            <Image src="/logo.png" alt="Parko" width={120} height={120} />
+            <h2 className="text-2xl font-bold">Owner Portal</h2>
+            <p className="text-sm text-muted-foreground text-center">Register your business, add spaces and track earnings.</p>
+            <img src="/car.gif" alt="car" className="w-full rounded-lg shadow-lg" />
           </div>
 
-          {step === 1 && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Business/Full Name</label>
-                <Input
-                  name="name"
-                  value={formData.name}
-                  onChange={handleChange}
-                  placeholder="Premium Parking Solutions"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Email</label>
-                <Input
-                  name="email"
-                  type="email"
-                  value={formData.email}
-                  onChange={handleChange}
-                  placeholder="owner@parkingbiz.com"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Phone Number</label>
-                <Input
-                  name="phone"
-                  type="tel"
-                  value={formData.phone}
-                  onChange={handleChange}
-                  placeholder="+1 (555) 000-0000"
-                  className="w-full"
-                />
-              </div>
-            </div>
-          )}
+          <div className="p-4">
+            <h1 className="text-3xl font-bold text-foreground mb-2">Parking Owner Registration</h1>
+            <p className="text-muted-foreground mb-6">Step {step} of 3</p>
 
-          {step === 2 && (
-            <div className="space-y-4">
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Password</label>
-                <Input
-                  name="password"
-                  type="password"
-                  value={formData.password}
-                  onChange={handleChange}
-                  placeholder="••••••••"
-                  className="w-full"
-                />
-              </div>
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Confirm Password</label>
-                <Input
-                  name="confirmPassword"
-                  type="password"
-                  value={formData.confirmPassword}
-                  onChange={handleChange}
-                  placeholder="••••••••"
-                  className="w-full"
-                />
-              </div>
+            <div className="flex gap-2 mb-6">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className={`h-1 flex-1 rounded-full transition-colors ${i <= step ? 'bg-secondary' : 'bg-border'}`} />
+              ))}
             </div>
-          )}
 
-          {step === 3 && (
-            <div className="space-y-4">
-              <div className="bg-secondary/10 border border-secondary/20 rounded-lg p-4 flex items-start gap-3">
-                <MapPin className="w-5 h-5 text-secondary mt-0.5 flex-shrink-0" />
+            {/* Error Display */}
+            {error && (
+              <div className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive">{error}</p>
+              </div>
+            )}
+
+            {step === 1 && (
+              <div className="space-y-4">
                 <div>
-                  <p className="font-semibold text-foreground text-sm">Location Setup</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Next step: Set your parking location on map and add your first parking space
-                  </p>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Business/Full Name</label>
+                  <Input name="name" value={formData.name} onChange={handleChange} placeholder="Premium Parking Solutions" className="w-full" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Email</label>
+                  <Input name="email" type="email" value={formData.email} onChange={handleChange} placeholder="owner@parkingbiz.com" className="w-full" />
                 </div>
               </div>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Phone Number (Optional)</label>
+                  <Input name="phone" type="tel" value={formData.phone} onChange={handleChange} placeholder="+1 555-000-0000" className="w-full" />
+                  <p className="text-xs text-muted-foreground mt-1">10-15 digits, may start with +</p>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-4">
+                <div>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Password</label>
+                  <Input name="password" type="password" value={formData.password} onChange={handleChange} placeholder="••••••••" className="w-full" />
+                  <ul className="text-xs text-muted-foreground mt-2 space-y-1">
+                    <li>• At least 8 characters long</li>
+                    <li>• Contains uppercase and lowercase letters</li>
+                    <li>• Contains at least one number</li>
+                  </ul>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Confirm Password</label>
+                  <Input name="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleChange} placeholder="••••••••" className="w-full" />
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-4 mt-8">
+              {step > 1 && (
+                <Button variant="outline" onClick={handleBack} disabled={loading} className="w-full">Previous</Button>
+              )}
+              {step < 3 ? (
+                <Button onClick={handleNext} disabled={loading} className="w-full">Next</Button>
+              ) : (
+                <Button onClick={handleComplete} disabled={loading} className="w-full">
+                  {loading ? 'Creating Account...' : 'Create Account'}
+                </Button>
+              )}
             </div>
-          )}
 
-          <div className="flex gap-4 mt-8">
-            {step > 1 && (
-              <Button variant="outline" onClick={() => setStep(step - 1)} className="w-full">
-                Previous
-              </Button>
-            )}
-            {step < 3 ? (
-              <Button onClick={handleNext} className="w-full">
-                Next
-              </Button>
-            ) : (
-              <Link href="/owner/dashboard" className="w-full">
-                <Button className="w-full">Complete Setup</Button>
-              </Link>
-            )}
+            <p className="text-center text-sm text-muted-foreground mt-6">Already have an account? <Link href="/owner/login" className="text-secondary font-semibold hover:underline">Sign In</Link></p>
           </div>
-
-          <p className="text-center text-sm text-muted-foreground mt-6">
-            Already have an account?{" "}
-            <Link href="/owner/login" className="text-secondary font-semibold hover:underline">
-              Sign In
-            </Link>
-          </p>
         </div>
       </div>
     </main>

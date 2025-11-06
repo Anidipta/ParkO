@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useEffect } from "react"
 import Link from "next/link"
 import { Plus, MapPin, Users, TrendingUp, LogOut, Menu, X, Edit2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -95,71 +96,27 @@ export default function OwnerDashboard() {
       100,
   )
 
+  const [analytics, setAnalytics] = useState<Array<any>>([])
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false)
+
+  useEffect(() => {
+    // fetch analytics for the first space (demo)
+    const spaceId = spaces[0]?.id
+    if (!spaceId) return
+    const to = new Date()
+    const from = new Date()
+    from.setDate(to.getDate() - 6)
+    const fmt = (d: Date) => d.toISOString().slice(0, 10)
+    setLoadingAnalytics(true)
+    fetch(`/api/analytics?space_id=${encodeURIComponent(spaceId)}&from=${fmt(from)}&to=${fmt(to)}`)
+      .then(r => r.json())
+      .then(j => setAnalytics(j.data ?? []))
+      .catch(() => setAnalytics([]))
+      .finally(() => setLoadingAnalytics(false))
+  }, [])
+
   return (
     <main className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-secondary rounded-lg flex items-center justify-center">
-              <MapPin className="w-5 h-5 text-secondary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold text-foreground">Parko Owner</h1>
-          </Link>
-
-          {/* Desktop Menu */}
-          <div className="hidden md:flex items-center gap-4">
-            <Link href="/owner/add-space">
-              <Button size="sm" className="gap-2">
-                <Plus className="w-4 h-4" />
-                Add Parking Space
-              </Button>
-            </Link>
-            <Link href="/owner/profile">
-              <Button variant="ghost" size="sm">
-                Profile
-              </Button>
-            </Link>
-            <Link href="/">
-              <Button variant="ghost" size="sm" className="text-destructive">
-                <LogOut className="w-4 h-4" />
-              </Button>
-            </Link>
-          </div>
-
-          {/* Mobile Menu Button */}
-          <button
-            className="md:hidden p-2 hover:bg-muted rounded-lg transition-colors"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            {menuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
-        </div>
-
-        {/* Mobile Menu */}
-        {menuOpen && (
-          <div className="md:hidden border-t border-border bg-card p-4 space-y-2">
-            <Link href="/owner/add-space" className="block">
-              <Button className="w-full justify-start gap-2">
-                <Plus className="w-4 h-4" />
-                Add Parking Space
-              </Button>
-            </Link>
-            <Link href="/owner/profile" className="block">
-              <Button variant="ghost" className="w-full justify-start">
-                Profile
-              </Button>
-            </Link>
-            <Link href="/" className="block">
-              <Button variant="ghost" className="w-full justify-start text-destructive">
-                <LogOut className="w-4 h-4" />
-                Logout
-              </Button>
-            </Link>
-          </div>
-        )}
-      </header>
-
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
@@ -227,6 +184,37 @@ export default function OwnerDashboard() {
         {/* Overview Tab */}
         {selectedTab === "overview" && (
           <div className="space-y-8">
+            <div>
+              <h3 className="text-xl font-bold text-foreground mb-4">Analytics (last 7 days)</h3>
+              <div className="bg-card border border-border rounded-lg overflow-hidden p-4">
+                {loadingAnalytics ? (
+                  <div className="text-sm text-muted-foreground">Loading analytics…</div>
+                ) : analytics.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">No analytics data available</div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs text-muted-foreground">
+                          <th className="p-2">Date</th>
+                          <th className="p-2">Bookings</th>
+                          <th className="p-2">Revenue</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.map((row: any) => (
+                          <tr key={row.date} className="border-t border-border">
+                            <td className="p-2">{row.date}</td>
+                            <td className="p-2">{row.total_bookings}</td>
+                            <td className="p-2">₹{Number(row.total_revenue || 0).toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
             <div>
               <h3 className="text-xl font-bold text-foreground mb-4">Recent Bookings</h3>
               <div className="bg-card border border-border rounded-lg overflow-hidden">
