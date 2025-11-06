@@ -1,6 +1,7 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
+import { supabase } from '@/lib/supabaseClient'
 import Link from "next/link"
 import { ArrowLeft, Upload, Check, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -31,18 +32,94 @@ export default function DriverVerification() {
     reader.readAsDataURL(file)
   }
 
+  // Camera capture
+  const [usingCameraFor, setUsingCameraFor] = useState<null | "license" | "plate" | "pan">(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  useEffect(() => {
+    let stream: MediaStream | null = null
+    if (usingCameraFor && typeof navigator !== 'undefined' && navigator.mediaDevices) {
+      navigator.mediaDevices
+        .getUserMedia({ video: { facingMode: 'environment' } })
+        .then((s) => {
+          stream = s
+          if (videoRef.current) {
+            videoRef.current.srcObject = s
+            videoRef.current.play().catch(() => {})
+          }
+        })
+        .catch(() => {
+          // user denied camera or not available
+        })
+    }
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop())
+    }
+  }, [usingCameraFor])
+
+  const simulateOCR = (type: string) => {
+    if (type === 'license') return `DL${Math.floor(100000 + Math.random() * 900000)}`
+    if (type === 'plate') return `MH${String(Math.floor(10 + Math.random() * 90)).padStart(2, '0')}AB${Math.floor(1000 + Math.random() * 9000)}`
+    return `ABCDE${Math.floor(1000 + Math.random() * 9000)}F`
+  }
+
+  const captureFromCamera = (type: "license" | "plate" | "pan") => {
+    const v = videoRef.current
+    const c = canvasRef.current
+    if (!v || !c) return
+    c.width = v.videoWidth || 640
+    c.height = v.videoHeight || 480
+    const ctx = c.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(v, 0, 0, c.width, c.height)
+    const data = c.toDataURL('image/jpeg', 0.9)
+    setDocuments((prev) => prev.map((d) => (d.type === type ? { ...d, file: null, preview: data, extracted: simulateOCR(type) } : d)))
+    setUsingCameraFor(null)
+  }
+
   const allUploaded = documents.every((doc) => doc.file)
 
   const handleSubmitDocuments = () => {
     if (allUploaded) {
-      setVerificationStep("review")
-      setProfileCompletion(60)
+      // send documents to server for storing and profile update
+      const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
+
+      const payload = {
+        user_id: user?.user_id,
+        documents: documents.map((d) => ({ type: d.type, extracted: d.extracted, b64: d.preview })),
+      }
+
+      fetch('/api/users/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+        .then((r) => r.json())
+        .then(() => {
+          setVerificationStep('review')
+          setProfileCompletion(60)
+        })
+        .catch(() => {
+          // fall back to client-only state
+          setVerificationStep('review')
+          setProfileCompletion(60)
+        })
     }
   }
 
   const handleConfirmVerification = () => {
-    setVerificationStep("complete")
-    setProfileCompletion(100)
+    const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
+    if (user?.user_id) {
+      fetch('/api/users/profile/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: user.user_id }) })
+        .then(() => {
+          setVerificationStep('complete')
+          setProfileCompletion(100)
+        })
+        .catch(() => {
+          setVerificationStep('complete')
+          setProfileCompletion(100)
+        })
+    } else {
+      setVerificationStep('complete')
+      setProfileCompletion(100)
+    }
   }
 
   const DocumentSection = ({ doc }: { doc: DocumentUpload }) => {
@@ -92,22 +169,42 @@ export default function DriverVerification() {
             </Button>
           </div>
         ) : (
-          <label className="block cursor-pointer">
-            <input
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) handleFileUpload(doc.type, file)
-              }}
-            />
-            <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary transition-colors">
-              <Upload className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm font-semibold text-foreground">Click to upload</p>
-              <p className="text-xs text-muted-foreground">or drag and drop</p>
-            </div>
-          </label>
+          <div>
+            {usingCameraFor === doc.type ? (
+              <div className="space-y-2">
+                <video ref={videoRef} className="w-full h-40 bg-black rounded" playsInline />
+                <div className="flex gap-2">
+                  <Button onClick={() => captureFromCamera(doc.type)} className="flex-1">Capture</Button>
+                  <Button variant="outline" onClick={() => setUsingCameraFor(null)} className="flex-1">Cancel</Button>
+                </div>
+                <canvas ref={canvasRef} className="hidden" />
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <label className="block cursor-pointer">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) handleFileUpload(doc.type, file)
+                    }}
+                  />
+                  <div className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary transition-colors">
+                    <Upload className="w-6 h-6 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm font-semibold text-foreground">Click to upload</p>
+                    <p className="text-xs text-muted-foreground">or drag and drop</p>
+                  </div>
+                </label>
+
+                <div className="flex gap-2">
+                  <Button onClick={() => setUsingCameraFor(doc.type)} className="flex-1">Use Camera</Button>
+                  <Button variant="outline" onClick={() => setDocuments(prev => prev.map(d => d.type === doc.type ? { ...d, preview: null, file: null } : d))} className="flex-1">Reset</Button>
+                </div>
+              </div>
+            )}
+          </div>
         )}
       </div>
     )

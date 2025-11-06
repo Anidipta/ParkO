@@ -4,6 +4,7 @@ import type React from "react"
 
 import { useState } from "react"
 import Link from "next/link"
+import { useRouter } from 'next/navigation'
 import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,6 +26,31 @@ export default function DriverSignup() {
 
   const handleNext = () => {
     if (step < 3) setStep(step + 1)
+  }
+
+  const router = useRouter()
+
+  async function handleComplete() {
+    // simple client-side hash for demo (not secure)
+    const password_hash = btoa(formData.password || '')
+
+    try {
+      const res = await fetch('/api/users/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: formData.email, password_hash, full_name: formData.name, phone: formData.phone, user_type: 'driver' }),
+      })
+      const json = await res.json()
+      if (!res.ok) throw new Error(json.error || 'Failed to register')
+
+      // store basic session info locally (demo)
+      window.localStorage.setItem('park_user', JSON.stringify(json.data))
+
+      // navigate to verification step
+      router.push('/driver/verification')
+    } catch (err: any) {
+      alert(err.message || 'Registration failed')
+    }
   }
 
   return (

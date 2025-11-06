@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
 import Link from "next/link"
 import { ArrowLeft, MapPin, Check } from "lucide-react"
@@ -17,6 +17,7 @@ export default function BookingPage() {
   const [duration, setDuration] = useState(2)
   const [currentTime, setCurrentTime] = useState("14:00")
   const [step, setStep] = useState<"time" | "payment" | "confirm">("time")
+  const [bookingResult, setBookingResult] = useState<any | null>(null)
 
   // Mock parking space details
   const space = {
@@ -41,7 +42,36 @@ export default function BookingPage() {
     if (step === "time") {
       setStep("payment")
     } else if (step === "payment") {
-      setStep("confirm")
+      ;(async () => {
+        try {
+          const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
+          const driver_id = user?.user_id
+          if (!driver_id) throw new Error('You must be signed in to book')
+
+          const start = new Date()
+          const [h, m] = currentTime.split(':').map(Number)
+          start.setHours(h, m, 0, 0)
+          const end = new Date(start.getTime() + duration * 60 * 60 * 1000)
+
+          const res = await fetch('/api/bookings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ driver_id, space_id: params.id, start_time: start.toISOString(), end_time: end.toISOString() }),
+          })
+          const json = await res.json()
+          if (!res.ok) throw new Error(json.error || 'Booking failed')
+
+          const booking = json.data
+
+          // mock payment: mark completed and get receipt
+          await fetch('/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: booking.booking_id, payment_method: 'card' }) })
+
+          setBookingResult(booking)
+          setStep('confirm')
+        } catch (err: any) {
+          alert(err.message || 'Booking failed')
+        }
+      })()
     }
   }
 
@@ -168,16 +198,16 @@ export default function BookingPage() {
         </div>
         <div className="border-t border-border pt-4">
           <p className="text-sm text-muted-foreground">Booking Reference</p>
-          <p className="font-mono font-bold text-foreground bg-muted p-2 rounded">BK-2025-001234</p>
+           <p className="font-mono font-bold text-foreground bg-muted p-2 rounded">{bookingResult?.booking_id ?? 'BK-2025-001234'}</p>
         </div>
         <div className="border-t border-border pt-4">
           <p className="text-sm text-muted-foreground">Amount</p>
-          <p className="text-2xl font-bold text-primary">₹{totalAmount}</p>
+           <p className="text-2xl font-bold text-primary">₹{bookingResult?.estimated_amount ?? totalAmount}</p>
         </div>
       </div>
 
       <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-        <p className="text-sm text-green-900 font-semibold">OTP sent to your phone: 7382</p>
+        <p className="text-sm text-green-900 font-semibold">OTP sent to your phone: {bookingResult?.otp_entry ?? '7382'}</p>
         <p className="text-xs text-green-800 mt-1">Use this OTP to enter your parking spot</p>
       </div>
 

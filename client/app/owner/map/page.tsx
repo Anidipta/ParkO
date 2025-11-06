@@ -1,45 +1,61 @@
 "use client"
 
-import { useState } from "react"
-import Link from "link"
+import { useEffect, useState } from "react"
+import Link from "next/link"
+import dynamic from "next/dynamic"
 import { ArrowLeft } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
-interface ParkingLocation {
-  id: string
-  name: string
-  lat: number
-  lng: number
-  capacity: number
-  occupied: number
+const MapClient = dynamic(() => import('@/components/map-client').then(m => m.default), { ssr: false })
+
+type Space = {
+  space_id: string
+  space_name: string
+  address: string
+  latitude: number
+  longitude: number
+  total_slots: number
 }
 
 export default function OwnerMap() {
-  const [userLat, setUserLat] = useState(40.7128)
-  const [userLng, setUserLng] = useState(-74.006)
-  const [selectedLocation, setSelectedLocation] = useState<string | null>(null)
+  const [spaces, setSpaces] = useState<Space[]>([])
+  const [ownerId, setOwnerId] = useState<string>('')
+  const [form, setForm] = useState({ space_name: '', address: '', latitude: '', longitude: '', total_slots: '10' })
 
-  const parkingLocations: ParkingLocation[] = [
-    { id: "L1", name: "Downtown Plaza", lat: 40.715, lng: -74.006, capacity: 50, occupied: 35 },
-    { id: "L2", name: "Tech Hub Garage", lat: 40.71, lng: -74.009, capacity: 100, occupied: 67 },
-    { id: "L3", name: "Shopping Mall", lat: 40.708, lng: -74.005, capacity: 75, occupied: 42 },
-  ]
+  useEffect(() => {
+    // If ownerId is set (e.g., from auth), fetch only their spaces; otherwise fetch all active
+    const q = ownerId ? `/api/parking?owner_id=${ownerId}` : `/api/parking`
+    fetch(q).then(r => r.json()).then(j => setSpaces(j?.data ?? [])).catch(() => setSpaces([]))
+  }, [ownerId])
 
-  const gridWidth = 400
-  const gridHeight = 300
-  const scale = 100000
+  async function createSpace(e: React.FormEvent) {
+    e.preventDefault()
+    // For now we require ownerId to be provided; in a full app you'd take from auth session
+    if (!ownerId) return alert('Set owner id first (simulate by entering owner id)')
 
-  const latToY = (lat: number) => ((40.72 - lat) * scale) / 200 + gridHeight / 2
-  const lngToX = (lng: number) => ((lng + 74.01) * scale) / 200 + gridWidth / 2
+    const body = {
+      owner_id: ownerId,
+      space_name: form.space_name,
+      address: form.address,
+      latitude: Number(form.latitude),
+      longitude: Number(form.longitude),
+      total_slots: Number(form.total_slots),
+    }
+
+    const res = await fetch('/api/parking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const json = await res.json()
+    if (res.ok) {
+      setSpaces(prev => [...prev, ...json.data])
+      setForm({ space_name: '', address: '', latitude: '', longitude: '', total_slots: '10' })
+    } else alert(json.error || 'Failed')
+  }
 
   return (
     <main className="min-h-screen bg-background">
       <div className="border-b border-border bg-card sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center gap-4">
           <Link href="/owner/dashboard">
-            <button className="p-2 hover:bg-muted rounded-lg transition-colors">
-              <ArrowLeft className="w-5 h-5" />
-            </button>
+            <button className="p-2 hover:bg-muted rounded-lg transition-colors"><ArrowLeft className="w-5 h-5" /></button>
           </Link>
           <h1 className="text-lg font-bold text-foreground">My Parking Locations</h1>
         </div>
@@ -47,108 +63,47 @@ export default function OwnerMap() {
 
       <div className="max-w-7xl mx-auto px-4 py-8">
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Map */}
           <div className="lg:col-span-2">
-            <div
-              className="relative bg-gradient-to-br from-blue-100 to-blue-50 border border-border rounded-lg overflow-hidden"
-              style={{ height: "500px" }}
-            >
-              <svg className="w-full h-full" viewBox={`0 0 ${gridWidth} ${gridHeight}`}>
-                {/* Grid */}
-                {Array.from({ length: 5 }).map((_, i) => (
-                  <g key={i}>
-                    <line x1={i * 80} y1="0" x2={i * 80} y2={gridHeight} stroke="#e5e7eb" strokeWidth="1" />
-                    <line x1="0" y1={i * 60} x2={gridWidth} y2={i * 60} stroke="#e5e7eb" strokeWidth="1" />
-                  </g>
-                ))}
-
-                {/* User */}
-                <circle cx={lngToX(userLng)} cy={latToY(userLat)} r="8" fill="#3b82f6" />
-                <circle
-                  cx={lngToX(userLng)}
-                  cy={latToY(userLat)}
-                  r="15"
-                  fill="none"
-                  stroke="#3b82f6"
-                  strokeWidth="2"
-                  opacity="0.5"
-                />
-
-                {/* Locations */}
-                {parkingLocations.map((loc) => (
-                  <g key={loc.id}>
-                    <circle
-                      cx={lngToX(loc.lng)}
-                      cy={latToY(loc.lat)}
-                      r="12"
-                      fill={selectedLocation === loc.id ? "#f97316" : "#7c3aed"}
-                      onClick={() => setSelectedLocation(loc.id)}
-                      style={{ cursor: "pointer" }}
-                    />
-                    <text
-                      x={lngToX(loc.lng)}
-                      y={latToY(loc.lat) + 4}
-                      textAnchor="middle"
-                      fontSize="10"
-                      fill="white"
-                      fontWeight="bold"
-                      pointerEvents="none"
-                    >
-                      {loc.capacity}
-                    </text>
-                  </g>
-                ))}
-              </svg>
-
+            <div className="relative bg-gradient-to-br from-blue-50 to-white border border-border rounded-lg overflow-hidden" style={{ height: 500 }}>
+              {typeof window !== 'undefined' && <MapClient userPos={null} spaces={spaces} />}
               <div className="absolute bottom-4 left-4 bg-white rounded-lg shadow-lg p-3 text-xs space-y-2">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                  <span>You</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-purple-500"></div>
-                  <span>Your Locations</span>
-                </div>
+                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-blue-500"/> <span>You</span></div>
+                <div className="flex items-center gap-2"><div className="w-3 h-3 rounded-full bg-purple-500"/> <span>Your Locations</span></div>
               </div>
             </div>
           </div>
 
-          {/* Locations List */}
           <div className="space-y-4">
-            <h3 className="font-bold text-foreground">Your Parking Locations</h3>
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {parkingLocations.map((loc) => (
-                <div
-                  key={loc.id}
-                  onClick={() => setSelectedLocation(loc.id)}
-                  className={`p-4 rounded-lg border cursor-pointer transition-colors ${
-                    selectedLocation === loc.id
-                      ? "bg-secondary/10 border-secondary"
-                      : "bg-card border-border hover:border-secondary"
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <h4 className="font-bold text-foreground text-sm">{loc.name}</h4>
-                    <span className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded">
-                      {loc.capacity} slots
-                    </span>
+            <h3 className="font-bold text-foreground">Manage Locations</h3>
+
+            <div className="space-y-3">
+              <label className="text-xs text-muted-foreground">Owner id (simulate auth)</label>
+              <input value={ownerId} onChange={(e) => setOwnerId(e.target.value)} className="w-full p-2 border rounded" />
+            </div>
+
+            <form onSubmit={createSpace} className="space-y-3">
+              <input placeholder="Space name" value={form.space_name} onChange={(e) => setForm(f => ({ ...f, space_name: e.target.value }))} className="w-full p-2 border rounded" />
+              <input placeholder="Address" value={form.address} onChange={(e) => setForm(f => ({ ...f, address: e.target.value }))} className="w-full p-2 border rounded" />
+              <div className="grid grid-cols-2 gap-2">
+                <input placeholder="Latitude" value={form.latitude} onChange={(e) => setForm(f => ({ ...f, latitude: e.target.value }))} className="p-2 border rounded" />
+                <input placeholder="Longitude" value={form.longitude} onChange={(e) => setForm(f => ({ ...f, longitude: e.target.value }))} className="p-2 border rounded" />
+              </div>
+              <input placeholder="Total slots" value={form.total_slots} onChange={(e) => setForm(f => ({ ...f, total_slots: e.target.value }))} className="w-full p-2 border rounded" />
+              <Button type="submit" className="w-full">Add Location</Button>
+            </form>
+
+            <div className="mt-4">
+              <h4 className="font-medium">Your locations ({spaces.length})</h4>
+              <div className="space-y-2 max-h-64 overflow-auto mt-2">
+                {spaces.map(s => (
+                  <div key={s.space_id} className="p-2 border rounded bg-background/60">
+                    <div className="font-semibold">{s.space_name}</div>
+                    <div className="text-xs text-muted-foreground">{s.address}</div>
+                    <div className="text-xs">Slots: {s.total_slots}</div>
+                    <Link href={`/owner/space/${s.space_id}`}><Button size="sm" variant="outline" className="mt-2">Manage</Button></Link>
                   </div>
-                  <p className="text-xs text-muted-foreground mb-3">
-                    {loc.occupied}/{loc.capacity} occupied
-                  </p>
-                  <div className="w-full bg-border rounded-full h-2">
-                    <div
-                      className="bg-secondary h-2 rounded-full transition-all"
-                      style={{ width: `${(loc.occupied / loc.capacity) * 100}%` }}
-                    />
-                  </div>
-                  <Link href={`/owner/space/${loc.id}`}>
-                    <Button size="sm" variant="outline" className="w-full mt-3 bg-transparent">
-                      Manage
-                    </Button>
-                  </Link>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
         </div>
