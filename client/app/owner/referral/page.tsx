@@ -1,32 +1,61 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import { ArrowLeft, Copy, Share2, Users } from "lucide-react"
 import { Button } from "@/components/ui/button"
 
 export default function ReferralPage() {
   const [copied, setCopied] = useState(false)
+  const [managers, setManagers] = useState<any[]>([])
+  const [loadingManagers, setLoadingManagers] = useState(true)
 
   const referralLink = "https://parko.app/join/mgr_xyz789abc"
-  const managers = [
-    {
-      id: 1,
-      name: "Raj Kumar",
-      email: "raj@manager.com",
-      space: "Downtown Plaza",
-      status: "Active",
-      joinDate: "Oct 15, 2025",
-    },
-    {
-      id: 2,
-      name: "Priya Singh",
-      email: "priya@manager.com",
-      space: "Tech Hub Garage",
-      status: "Active",
-      joinDate: "Sep 22, 2025",
-    },
-  ]
+
+  // fetch all managers for this owner
+  useEffect(() => {
+    const loadManagers = async () => {
+      try {
+        // First get owner's spaces, then get managers for each space
+        const spacesRes = await fetch('/api/auth/session')
+        if (!spacesRes.ok) return
+        
+        const sessionJson = await spacesRes.json()
+        const userId = sessionJson?.user?.userId ?? sessionJson?.user?.user_id
+        if (!userId) return
+
+        const ownersSpacesRes = await fetch(`/api/parking?owner_id=${encodeURIComponent(userId)}`)
+        if (!ownersSpacesRes.ok) return
+        
+        const spacesJson = await ownersSpacesRes.json()
+        const spaces = spacesJson.data || []
+        
+        const allManagers: any[] = []
+        for (const space of spaces) {
+          const managersRes = await fetch(`/api/owners/managers?space_id=${space.space_id}`)
+          if (managersRes.ok) {
+            const managersJson = await managersRes.json()
+            const spaceManagers = (managersJson.data || []).map((mgr: any) => ({
+              id: mgr.manager_id,
+              name: mgr.users?.full_name || 'Unknown',
+              email: mgr.users?.email || 'No email',
+              space: space.space_name,
+              status: mgr.invite_status === 'accepted' ? 'Active' : 'Pending',
+              joinDate: mgr.assigned_at ? new Date(mgr.assigned_at).toLocaleDateString() : 'Unknown',
+            }))
+            allManagers.push(...spaceManagers)
+          }
+        }
+        
+        setManagers(allManagers)
+      } catch (err) {
+        console.warn('Failed to load managers:', err)
+      } finally {
+        setLoadingManagers(false)
+      }
+    }
+    loadManagers()
+  }, [])
 
   const handleCopy = () => {
     navigator.clipboard.writeText(referralLink)
@@ -83,7 +112,26 @@ export default function ReferralPage() {
           </h3>
 
           <div className="space-y-3">
-            {managers.map((mgr) => (
+            {loadingManagers ? (
+              // Loading state
+              <div className="space-y-3">
+                {[1, 2].map((i) => (
+                  <div key={i} className="bg-card border border-border rounded-lg p-4">
+                    <div className="animate-pulse">
+                      <div className="h-4 bg-muted rounded w-1/3 mb-2"></div>
+                      <div className="h-3 bg-muted rounded w-1/2"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : managers.length === 0 ? (
+              // Empty state
+              <div className="bg-card border border-border rounded-lg p-6 text-center">
+                <p className="text-muted-foreground">No managers assigned yet. Share your referral link to invite managers!</p>
+              </div>
+            ) : (
+              // Managers list
+              managers.map((mgr) => (
               <div key={mgr.id} className="bg-card border border-border rounded-lg p-4">
                 <div className="flex items-start justify-between mb-2">
                   <div>
@@ -99,7 +147,8 @@ export default function ReferralPage() {
                   <p className="text-muted-foreground">Joined {mgr.joinDate}</p>
                 </div>
               </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 

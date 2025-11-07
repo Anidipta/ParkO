@@ -18,18 +18,54 @@ export default function BookingPage() {
   const [currentTime, setCurrentTime] = useState("14:00")
   const [step, setStep] = useState<"time" | "payment" | "confirm">("time")
   const [bookingResult, setBookingResult] = useState<any | null>(null)
+  const [space, setSpace] = useState<any>(null)
+  const [loadingSpace, setLoadingSpace] = useState(true)
 
-  // Mock parking space details
-  const space = {
-    id: params.id,
-    name: "Downtown Plaza",
-    address: "123 Main Street, Downtown",
-    rate: 60,
-    type: "Standard",
-    level: "Level 2, Spot A12",
-  }
+  // Fetch real parking space details
+  useEffect(() => {
+    const spaceId = params.id
+    if (!spaceId) return
+    
+    fetch(`/api/parking`)
+      .then(res => res.json())
+      .then(json => {
+        if (json.data && Array.isArray(json.data)) {
+          const foundSpace = json.data.find((s: any) => s.space_id === spaceId)
+          if (foundSpace) {
+            setSpace({
+              id: foundSpace.space_id,
+              name: foundSpace.space_name,
+              address: foundSpace.address || 'Unknown Address',
+              rate: 60, // default rate, could fetch from slots
+              type: 'Standard',
+              level: 'Available',
+            })
+          } else {
+            setSpace({
+              id: spaceId,
+              name: 'Parking Space',
+              address: 'Loading...',
+              rate: 60,
+              type: 'Standard',
+              level: 'Available',
+            })
+          }
+        }
+      })
+      .catch(() => {
+        setSpace({
+          id: spaceId,
+          name: 'Parking Space',
+          address: 'Error loading address',
+          rate: 60,
+          type: 'Standard',
+          level: 'Available',
+        })
+      })
+      .finally(() => setLoadingSpace(false))
+  }, [params.id])
 
-  const hourlyRate = 60
+  const hourlyRate = space?.rate || 60
   const totalAmount = duration * hourlyRate
 
   const timeSlots: TimeSlot[] = Array.from({ length: 24 }, (_, i) => ({
@@ -44,8 +80,13 @@ export default function BookingPage() {
     } else if (step === "payment") {
       ;(async () => {
         try {
-          const user = typeof window !== 'undefined' ? JSON.parse(window.localStorage.getItem('park_user') || 'null') : null
-          const driver_id = user?.user_id
+          // Get current user from session
+          const sessionRes = await fetch('/api/auth/session', { credentials: 'include' })
+          if (!sessionRes.ok) throw new Error('You must be signed in to book')
+          
+          const sessionJson = await sessionRes.json()
+          const user = sessionJson?.user
+          const driver_id = user?.userId ?? user?.user_id
           if (!driver_id) throw new Error('You must be signed in to book')
 
           const start = new Date()
@@ -63,7 +104,7 @@ export default function BookingPage() {
 
           const booking = json.data
 
-          // mock payment: mark completed and get receipt
+          // create payment record (will be processed) via payments API
           await fetch('/api/payments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ booking_id: booking.booking_id, payment_method: 'card' }) })
 
           setBookingResult(booking)
@@ -206,8 +247,8 @@ export default function BookingPage() {
         </div>
       </div>
 
-      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-        <p className="text-sm text-green-900 font-semibold">OTP sent to your phone: {bookingResult?.otp_entry ?? '7382'}</p>
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+        <p className="text-sm text-green-900 font-semibold">OTP sent to your phone: {bookingResult?.otp_entry ?? '—'}</p>
         <p className="text-xs text-green-800 mt-1">Use this OTP to enter your parking spot</p>
       </div>
 
@@ -231,12 +272,26 @@ export default function BookingPage() {
       </div>
 
       <div className="max-w-3xl mx-auto px-4 py-8">
-        {/* Space Info */}
-        <div className="bg-card border border-border rounded-lg p-6 mb-8">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h2 className="text-2xl font-bold text-foreground">{space.name}</h2>
-              <p className="text-muted-foreground flex items-center gap-2 mt-2">
+        {/* Loading State */}
+        {loadingSpace ? (
+          <div className="bg-card border border-border rounded-lg p-6 mb-8">
+            <div className="animate-pulse">
+              <div className="h-6 bg-muted rounded w-1/2 mb-2"></div>
+              <div className="h-4 bg-muted rounded w-3/4"></div>
+            </div>
+          </div>
+        ) : !space ? (
+          <div className="bg-card border border-border rounded-lg p-6 mb-8">
+            <p className="text-destructive">Space not found</p>
+          </div>
+        ) : (
+          <>
+            {/* Space Info */}
+            <div className="bg-card border border-border rounded-lg p-6 mb-8">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-foreground">{space.name}</h2>
+                  <p className="text-muted-foreground flex items-center gap-2 mt-2">
                 <MapPin className="w-4 h-4" />
                 {space.address}
               </p>
@@ -289,6 +344,8 @@ export default function BookingPage() {
               {step === "time" ? "Continue to Payment" : "Confirm Booking"}
             </Button>
           </div>
+        )}
+            </>
         )}
       </div>
     </main>

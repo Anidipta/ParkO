@@ -52,8 +52,8 @@ export async function POST(req: NextRequest) {
 
     const booking = (data as any)[0]
 
-    // create payment record (mock)
-    await supabaseAdmin.from('payments').insert([{ booking_id: booking.booking_id, estimated_amount: estimated, payment_method: 'card', payment_status: 'pending' }])
+  // create initial payment record (pending)
+  await supabaseAdmin.from('payments').insert([{ booking_id: booking.booking_id, estimated_amount: estimated, payment_method: 'card', payment_status: 'pending' }])
 
     return new Response(JSON.stringify({ data: booking }), { status: 201, headers: { 'Content-Type': 'application/json' } })
   } catch (err: any) {
@@ -67,7 +67,11 @@ export async function GET(req: NextRequest) {
     const driverId = url.searchParams.get('driver_id')
     const spaceId = url.searchParams.get('space_id')
 
-    let q = supabaseAdmin.from('bookings').select('*').limit(500)
+    let q = supabaseAdmin
+      .from('bookings')
+      .select('*, users(full_name, email)')
+      .limit(500)
+      
     if (driverId) q = q.eq('driver_id', driverId)
     if (spaceId) q = q.eq('space_id', spaceId)
 

@@ -29,66 +29,90 @@ interface Booking {
 export default function OwnerDashboard() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedTab, setSelectedTab] = useState<"overview" | "spaces" | "managers">("overview")
+  const [spaces, setSpaces] = useState<ParkingSpace[]>([])
+  const [recentBookings, setRecentBookings] = useState<Booking[]>([])
+  const [loadingSpaces, setLoadingSpaces] = useState(true)
+  const [loadingBookings, setLoadingBookings] = useState(true)
 
-  const spaces: ParkingSpace[] = [
-    {
-      id: "SP001",
-      name: "Downtown Plaza",
-      location: "Downtown District",
-      capacity: 50,
-      occupied: 35,
-      rate: 60,
-      managers: 2,
-    },
-    {
-      id: "SP002",
-      name: "Tech Hub Garage",
-      location: "Tech Park",
-      capacity: 100,
-      occupied: 67,
-      rate: 50,
-      managers: 1,
-    },
-    {
-      id: "SP003",
-      name: "Shopping Mall",
-      location: "Retail Zone",
-      capacity: 75,
-      occupied: 42,
-      rate: 45,
-      managers: 3,
-    },
-  ]
+  // Load owner's session, then fetch spaces and bookings from APIs.
+  useEffect(() => {
+    let mounted = true
+    async function loadSpacesAndBookings() {
+      try {
+        // Get session to identify owner (if available)
+        const sessRes = await fetch('/api/auth/session', { credentials: 'include' })
+        const sessJson = await sessRes.json().catch(() => ({}))
+        const ownerId = sessJson?.user?.userId ?? sessJson?.user?.user_id ?? null
 
-  const recentBookings: Booking[] = [
-    {
-      id: "BK001",
-      driver: "John Doe",
-      space: "Downtown Plaza",
-      startTime: "14:30",
-      endTime: "16:30",
-      amount: 120,
-      status: "active",
-    },
-    {
-      id: "BK002",
-      driver: "Jane Smith",
-      space: "Tech Hub Garage",
-      startTime: "10:00",
-      endTime: "14:00",
-      amount: 200,
-      status: "active",
-    },
-    {
-      id: "BK003",
-      driver: "Mike Johnson",
-      space: "Shopping Mall",
-      startTime: "09:00",
-      endTime: "11:00",
-      amount: 90,
-      status: "completed",
-    },
-  ]
+        // Fetch spaces belonging to this owner (if ownerId available) otherwise fetch active spaces
+        const spacesUrl = ownerId ? `/api/parking?owner_id=${encodeURIComponent(ownerId)}` : '/api/parking'
+        setLoadingSpaces(true)
+        const spRes = await fetch(spacesUrl, { credentials: 'include' })
+        const spJson = await spRes.json().catch(() => ({ data: [] }))
+        const rawSpaces = Array.isArray(spJson.data) ? spJson.data : []
+
+        const mappedSpaces: ParkingSpace[] = rawSpaces.map((s: any) => ({
+          id: s.space_id ?? s.id ?? String(s.id ?? ''),
+          name: s.space_name ?? s.name ?? 'Parking Space',
+          location: s.address ?? s.location ?? '—',
+          capacity: Number(s.total_slots ?? s.capacity ?? 0),
+          occupied: Number(s.occupied ?? 0),
+          rate: Number(s.hourly_rate ?? s.cheapest_rate ?? s.rate ?? 0),
+          managers: Number(s.managers_count ?? s.managers ?? 0),
+        }))
+
+        if (!mounted) return
+        setSpaces(mappedSpaces)
+        setLoadingSpaces(false)
+
+        // Fetch recent bookings for all spaces owned
+        setLoadingBookings(true)
+        const bookingsPerSpace = await Promise.all(
+          mappedSpaces.map(async (sp) => {
+            try {
+              const res = await fetch(`/api/bookings?space_id=${encodeURIComponent(sp.id)}`, { credentials: 'include' })
+              const j = await res.json().catch(() => ({ data: [] }))
+              const raw = Array.isArray(j.data) ? j.data : []
+              return raw.map((b: any) => ({
+                id: b.booking_id ?? b.id ?? String(b.id ?? ''),
+                driver: b.users?.full_name ?? b.driver_name ?? b.driver ?? 'Driver',
+                space: sp.name,
+                startTime: b.start_time ? new Date(b.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (b.start_time ?? ''),
+                endTime: b.end_time ? new Date(b.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (b.end_time ?? ''),
+                amount: Number(b.estimated_amount ?? b.amount ?? 0),
+                status: (b.booking_status ?? b.status ?? 'pending') as Booking['status'],
+              }))
+            } catch (err) {
+              return []
+            }
+          }),
+        )
+
+        if (!mounted) return
+        const flattened = bookingsPerSpace.flat().sort((a, b) => {
+          // sort by most recent start time (fallback to 0)
+          const ta = new Date(a.startTime).getTime() || 0
+          const tb = new Date(b.startTime).getTime() || 0
+          return tb - ta
+        })
+        setRecentBookings(flattened.slice(0, 25))
+      } catch (err) {
+        // ignore errors but stop spinners
+        setSpaces([])
+        setRecentBookings([])
+      } finally {
+        if (mounted) {
+          setLoadingSpaces(false)
+          setLoadingBookings(false)
+        }
+      }
+    }
+
+    loadSpacesAndBookings()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   const totalEarnings = spaces.reduce((sum, space) => sum + space.occupied * space.rate, 0)
   const totalOccupancy = Math.round(
@@ -98,11 +122,15 @@ export default function OwnerDashboard() {
 
   const [analytics, setAnalytics] = useState<Array<any>>([])
   const [loadingAnalytics, setLoadingAnalytics] = useState(false)
+  const [analyticsLoaded, setAnalyticsLoaded] = useState(false)
 
   useEffect(() => {
-    // fetch analytics for the first space (demo)
+    // fetch analytics for the first space only once
+    if (analyticsLoaded || spaces.length === 0) return
     const spaceId = spaces[0]?.id
     if (!spaceId) return
+    
+    setAnalyticsLoaded(true) // Prevent re-runs
     const to = new Date()
     const from = new Date()
     from.setDate(to.getDate() - 6)
@@ -113,10 +141,10 @@ export default function OwnerDashboard() {
       .then(j => setAnalytics(j.data ?? []))
       .catch(() => setAnalytics([]))
       .finally(() => setLoadingAnalytics(false))
-  }, [])
+  }, [spaces.length > 0, analyticsLoaded]) // Only run when spaces are available and not already loaded
 
   return (
-    <main className="min-h-screen bg-background">
+    <main className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
@@ -126,13 +154,15 @@ export default function OwnerDashboard() {
 
         {/* Key Metrics */}
         <div className="grid md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-card border border-border rounded-lg p-6">
+          <div className="card-pattern border border-blue-200/50 rounded-xl p-6 shadow-lg hover:shadow-xl transition-all duration-300">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <p className="text-sm text-muted-foreground mb-1">Total Earnings</p>
-                <h3 className="text-3xl font-bold text-foreground">₹{totalEarnings.toLocaleString()}</h3>
+                <p className="text-sm text-blue-600 font-medium mb-1">Total Earnings</p>
+                <h3 className="text-3xl font-bold text-slate-800">₹{totalEarnings.toLocaleString()}</h3>
               </div>
-              <TrendingUp className="w-8 h-8 text-secondary" />
+              <div className="bg-gradient-to-br from-green-400 to-green-600 p-2 rounded-lg shadow-lg">
+                <TrendingUp className="w-6 h-6 text-white" />
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">Today's revenue from all spaces</p>
           </div>
@@ -141,7 +171,7 @@ export default function OwnerDashboard() {
             <div className="flex items-start justify-between mb-4">
               <div>
                 <p className="text-sm text-muted-foreground mb-1">Occupancy Rate</p>
-                <h3 className="text-3xl font-bold text-foreground">{totalOccupancy}%</h3>
+                <h3 className="text-3xl font-bold text-foreground">{ totalOccupancy > 0 ? totalOccupancy + '%' : '0%' }</h3>
               </div>
               <div className="w-8 h-8 bg-secondary/10 rounded-lg flex items-center justify-center">
                 <MapPin className="w-5 h-5 text-secondary" />
@@ -165,15 +195,15 @@ export default function OwnerDashboard() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-4 mb-8 border-b border-border">
+        <div className="flex mb-8 border-b border-border w-full">
           {(["overview", "spaces", "managers"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setSelectedTab(tab)}
-              className={`px-4 py-3 font-semibold border-b-2 transition-colors ${
+              className={`flex-1 px-4 py-3 font-semibold border-2 rounded-lg mx-2 transition-colors ${
                 selectedTab === tab
-                  ? "border-secondary text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground"
+                  ? "border-red-500 text-foreground bg-gray-200"
+                  : "border-black bg-gray-100 text-muted-foreground hover:text-foreground hover:bg-gray-200"
               }`}
             >
               {tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -250,58 +280,62 @@ export default function OwnerDashboard() {
 
         {/* Spaces Tab */}
         {selectedTab === "spaces" && (
-          <div className="space-y-4">
-            {spaces.map((space) => (
-              <div key={space.id} className="bg-card border border-border rounded-lg p-6">
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-bold text-foreground">{space.name}</h3>
-                    <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
-                      <MapPin className="w-3 h-3" />
-                      {space.location}
-                    </p>
+          <div>
+            <div className="grid lg:grid-cols-3 md:grid-cols-2 grid-cols-1 gap-6">
+              {spaces.map((space) => (
+                <div key={space.id} className="bg-card border border-border rounded-lg p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-bold text-foreground">{space.name}</h3>
+                      <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
+                        <MapPin className="w-3 h-3" />
+                        {space.location}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-lg font-bold text-secondary">₹{space.rate}</p>
+                      <p className="text-xs text-muted-foreground">per hour</p>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p className="text-2xl font-bold text-secondary">₹{space.rate}</p>
-                    <p className="text-xs text-muted-foreground">per hour</p>
+
+                  <div className="grid grid-cols-3 gap-2 mb-3">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Capacity</p>
+                      <p className="font-bold text-foreground">{space.capacity}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Occupied</p>
+                      <p className="font-bold text-foreground">{space.occupied}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Occupancy</p>
+                      <p className="font-bold text-foreground">{Math.round((space.occupied / Math.max(1, space.capacity)) * 100)}%</p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <Link href={`/owner/space/${space.id}`} className="flex-1">
+                      <Button variant="outline" size="sm" className="w-full gap-2 bg-transparent">
+                        <Edit2 className="w-4 h-4" />
+                        Manage
+                      </Button>
+                    </Link>
+                    <Link href={`/owner/space/${space.id}?map=1`}>
+                      <Button variant="outline" size="sm" className="gap-2 bg-transparent">
+                        <MapPin className="w-4 h-4" />
+                        View Map
+                      </Button>
+                    </Link>
                   </div>
                 </div>
+              ))}
+            </div>
 
-                <div className="grid grid-cols-3 gap-4 mb-4 pb-4 border-b border-border">
-                  <div>
-                    <p className="text-xs text-muted-foreground">Capacity</p>
-                    <p className="font-bold text-foreground">{space.capacity} spots</p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Occupied</p>
-                    <p className="font-bold text-foreground">
-                      {space.occupied}/{space.capacity}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs text-muted-foreground">Occupancy</p>
-                    <p className="font-bold text-foreground">{Math.round((space.occupied / space.capacity) * 100)}%</p>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  <Link href={`/owner/space/${space.id}`} className="flex-1">
-                    <Button variant="outline" size="sm" className="w-full gap-2 bg-transparent">
-                      <Edit2 className="w-4 h-4" />
-                      Manage
-                    </Button>
-                  </Link>
-                  <Button variant="outline" size="sm" className="gap-2 bg-transparent">
-                    <MapPin className="w-4 h-4" />
-                    View Map
-                  </Button>
-                </div>
-              </div>
-            ))}
-
-            <Link href="/owner/add-space">
-              <Button className="w-full">+ Add New Parking Space</Button>
-            </Link>
+            <div className="mt-6">
+              <Link href="/owner/add-space">
+                <Button className="w-full">+ Add New Parking Space</Button>
+              </Link>
+            </div>
           </div>
         )}
 

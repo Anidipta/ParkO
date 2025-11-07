@@ -12,8 +12,9 @@ export async function POST(req: NextRequest) {
     const user = (data && (data as any)[0]) ?? null
     if (!user) return new Response(JSON.stringify({ error: 'User not found' }), { status: 404 })
 
-    // NOTE: password_hash in DB is stored as-is in this demo; compare directly
-    if (user.password_hash !== password_hash) return new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401 })
+  // NOTE: this implementation compares the provided password_hash directly for legacy reasons.
+  // In production you MUST store and verify hashed passwords (bcrypt/argon2) and never compare raw secrets.
+  if (user.password_hash !== password_hash) return new Response(JSON.stringify({ error: 'Invalid credentials' }), { status: 401 })
 
     return new Response(JSON.stringify({ data: user }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (err: any) {

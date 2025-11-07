@@ -41,7 +41,8 @@ CREATE TABLE parking_spaces (
     longitude NUMERIC(11, 8) NOT NULL,
     total_slots INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active BOOLEAN DEFAULT TRUE
+    is_active BOOLEAN DEFAULT TRUE,
+    hourly_rate NUMERIC(10,2) DEFAULT 0
 );
 CREATE INDEX idx_spaces_location ON parking_spaces(latitude, longitude);
 CREATE INDEX idx_spaces_owner ON parking_spaces(owner_id);

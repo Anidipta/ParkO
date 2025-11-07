@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { verifySessionToken, type SessionData } from './auth'
+// Re-export createSessionToken for compatibility with older imports
+export { createSessionToken } from './auth'
 
 /**
  * Extract session token from request cookies

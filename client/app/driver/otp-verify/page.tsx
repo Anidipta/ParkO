@@ -123,13 +123,7 @@ export default function OTPVerify() {
             )}
           </div>
 
-          {/* Demo Info */}
-          <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <p className="text-xs text-blue-900 font-semibold mb-1">Demo Mode</p>
-            <p className="text-xs text-blue-800">
-              Use OTP: <span className="font-mono font-bold">7382</span>
-            </p>
-          </div>
+          {/* Removed demo info — OTP comes from real verification flow */}
         </div>
       </div>
     </main>

@@ -7,9 +7,9 @@ export async function POST(req: NextRequest) {
     const { booking_id, payment_method } = body
     if (!booking_id || !payment_method) return new Response(JSON.stringify({ error: 'Missing fields' }), { status: 400 })
 
-    // mark payment as completed (mock) and generate receipt url
-    const transactionId = `txn_${Math.random().toString(36).slice(2, 10)}`
-    const receiptUrl = `https://api.example.com/receipts/${transactionId}`
+    // Process payment (in production this would integrate with Stripe/PayPal etc.)
+    const transactionId = `txn_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+    const receiptUrl = `/api/receipts/${transactionId}` // internal receipt endpoint
 
     const { data, error } = await supabaseAdmin.from('payments').update({ payment_status: 'completed', transaction_id: transactionId, receipt_url: receiptUrl, payment_method }).eq('booking_id', booking_id)
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })

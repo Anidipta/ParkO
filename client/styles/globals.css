@@ -152,9 +152,8 @@
 /* --- Refined borders, shadows and running gradient (mirror) --- */
 :root { --shadow-sm: 0 4px 12px rgba(2,6,23,0.06); --shadow-md: 0 10px 30px rgba(2,6,23,0.08); --shadow-lg: 0 30px 80px rgba(2,6,23,0.12); --glass-border: rgba(3,7,18,0.06); }
 
-@keyframes gradientShift { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
-
-.running-gradient { background: linear-gradient(90deg, var(--primary) 0%, var(--sidebar-primary) 50%, rgba(14,196,150,0.06) 70%); background-size: 300% 100%; animation: gradientShift 9s ease infinite; }
+/* Neutralize running gradient animation and use static amber->brown->amber gradient */
+.running-gradient { background: linear-gradient(90deg, #FFD18B 0%, #A6632B 50%, #FFD18B 100%); background-size: 100% 100%; animation: none; }
 .card-border { border: 1px solid var(--glass-border); border-radius: 1rem; }
 .card-shadow { box-shadow: var(--shadow-md); }
 .hero-card { padding: 2rem; border-radius: 1rem; background: linear-gradient(180deg, rgba(255,255,255,0.95), rgba(255,255,255,0.88)); border: 1px solid rgba(3,7,18,0.04); box-shadow: var(--shadow-lg); }

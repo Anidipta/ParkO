@@ -1,10 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useSearchParams } from "next/navigation"
 import Link from "next/link"
+import dynamic from "next/dynamic"
 import { ArrowLeft, MapPin, Users, AlertCircle } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { useToast } from '@/hooks/use-toast'
+
+const MapClient = dynamic(() => import('@/components/map-client').then(m => m.default), { ssr: false })
 
 interface Slot {
   id: string
@@ -16,6 +20,7 @@ interface Slot {
 
 export default function SpaceManagement() {
   const params = useParams()
+  const searchParams = useSearchParams()
   const [selectedTab, setSelectedTab] = useState<"overview" | "slots" | "managers">("overview")
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [inviteName, setInviteName] = useState('')
@@ -23,35 +28,82 @@ export default function SpaceManagement() {
   const [invitePhone, setInvitePhone] = useState('')
   const [inviteUrl, setInviteUrl] = useState('')
   const [managers, setManagers] = useState<any[]>([])
+  const [currentUser, setCurrentUser] = useState<any>(null)
   const [editRate, setEditRate] = useState(false)
   const [rate, setRate] = useState("60")
 
-  const spaceDetails = {
-    name: "Downtown Plaza",
-    address: "123 Main Street",
-    capacity: 50,
-    occupied: 35,
-    rate: 60,
-    managers: 2,
-    type: "Standard",
-  }
+  const [spaceDetails, setSpaceDetails] = useState<any | null>(null)
+  const [slots, setSlots] = useState<Slot[]>([])
+  const [availableSlots, setAvailableSlots] = useState<number>(0)
+  const [maintenanceSlots, setMaintenanceSlots] = useState<number>(0)
+  const [showMap, setShowMap] = useState(false)
+  const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null)
+  const [slotBookings, setSlotBookings] = useState<any[]>([])
+  const { toast } = useToast()
 
-  const slots: Slot[] = Array.from({ length: 50 }, (_, i) => ({
-    id: `S${i + 1}`,
-    number: String(i + 1),
-    status: i < 35 ? "occupied" : i < 48 ? "available" : "maintenance",
-    type: i % 10 === 0 ? "disabled" : i % 5 === 0 ? "premium" : "standard",
-    currentBooking:
-      i < 35
-        ? {
-            driver: `Driver ${i + 1}`,
-            endTime: `${14 + (i % 6)}:30`,
-          }
-        : undefined,
-  }))
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try { setCurrentUser(JSON.parse(window.localStorage.getItem('park_user') || 'null')) } catch (e) { setCurrentUser(null) }
+    // if url contains ?map=1 open map modal
+    try {
+      if (searchParams?.get('map') === '1') setShowMap(true)
+    } catch (e) {}
+  }, [])
 
-  const availableSlots = slots.filter((s) => s.status === "available").length
-  const maintenanceSlots = slots.filter((s) => s.status === "maintenance").length
+  // Load real space and slots from API
+  useEffect(() => {
+    const id = params.id
+    if (!id) return
+
+    // fetch parking space details (search and pick the matching id)
+    fetch(`/api/parking`)
+      .then((res) => res.json())
+      .then((json) => {
+        const found = Array.isArray(json.data) ? json.data.find((s: any) => s.space_id === id) : null
+        if (found) setSpaceDetails(found)
+      })
+      .catch(() => {
+        // ignore
+      })
+
+    // fetch slots for this space
+    fetch(`/api/slots?space_id=${id}`)
+      .then((res) => res.json())
+      .then((json) => {
+        const raw = Array.isArray(json.data) ? json.data : []
+        const mapped: Slot[] = raw.map((slot: any) => ({
+          id: slot.slot_id ?? slot.id ?? slot.slot_number,
+          number: slot.slot_number ?? String(slot.slot_id ?? ''),
+          status: slot.is_available === true ? 'available' : slot.is_available === false ? 'occupied' : 'maintenance',
+          type: slot.slot_type ?? 'standard',
+          currentBooking: undefined,
+        }))
+        setSlots(mapped)
+      })
+      .catch(() => {})
+  }, [params.id])
+
+  // derive counts when slots or space details update
+  useEffect(() => {
+    const occ = slots.filter((s) => s.status === 'occupied').length
+    const maint = slots.filter((s) => s.status === 'maintenance').length
+    const cap = Number(spaceDetails?.total_slots ?? slots.length ?? 0)
+    const avail = Math.max(0, cap - occ - maint)
+    setMaintenanceSlots(maint)
+    setAvailableSlots(avail)
+  }, [slots, spaceDetails])
+
+  // when space details load, initialize rate state from DB
+  useEffect(() => {
+    if (spaceDetails && spaceDetails.hourly_rate != null) {
+      setRate(String(spaceDetails.hourly_rate))
+    }
+  }, [spaceDetails])
+
+  const occupied = slots.filter((s) => s.status === 'occupied').length
+  const capacity = spaceDetails?.total_slots ?? slots.length
+  // prefer explicit space hourly_rate when available
+  const displayRate = Number(spaceDetails?.hourly_rate ?? spaceDetails?.cheapest_rate ?? Number(rate) ?? 0)
 
   async function doInvite() {
     if (!inviteEmail) return alert('Enter email')
@@ -63,6 +115,8 @@ export default function SpaceManagement() {
       setInviteUrl(j.invite_url)
       setShowInviteForm(false)
       loadManagers()
+      // show toast with invite URL
+      try { toast({ title: 'Invite link', description: j.invite_url }) } catch (e) {}
     } catch (err: any) {
       alert(err.message || 'Invite failed')
     }
@@ -78,6 +132,18 @@ export default function SpaceManagement() {
     }
   }
 
+  async function transferManager(userId: string) {
+    try {
+      const res = await fetch('/api/owners/transfer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ space_id: params.id, new_manager_user_id: userId }) })
+      const j = await res.json()
+      if (!res.ok) throw new Error(j.error || 'Transfer failed')
+      toast({ title: 'Manager transferred', description: 'New manager assigned' })
+      loadManagers()
+    } catch (err: any) {
+      alert(err.message || 'Transfer failed')
+    }
+  }
+
   // load managers on tab open
   useEffect(() => { if (selectedTab === 'managers') loadManagers() }, [selectedTab])
 
@@ -90,14 +156,22 @@ export default function SpaceManagement() {
         es.onmessage = (ev) => {
           try {
             const parsed = JSON.parse(ev.data)
-            const avail = (parsed.slots || []).filter((s: any) => s.is_available).length
-            // update small availability UI (local state)
-            // we don't want to replace the whole slots grid mock, just update managers count placeholder
-            // For demo: update managers count to show availability (temporary repurpose)
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            const el = document.querySelector('[data-live-available]')
-            if (el) el.textContent = String(avail)
+            const raw = (parsed.slots || [])
+            const mapped: Slot[] = raw.map((slot: any) => ({
+              id: slot.slot_id ?? slot.slot_number,
+              number: slot.slot_number ?? String(slot.slot_id ?? ''),
+              status: slot.is_available === true ? 'available' : slot.is_available === false ? 'occupied' : 'maintenance',
+              type: slot.slot_type ?? 'standard',
+              currentBooking: undefined,
+            }))
+            const occ = mapped.filter((s) => s.status === 'occupied').length
+            const maint = mapped.filter((s) => s.status === 'maintenance').length
+            const cap = mapped.length
+            const avail = Math.max(0, cap - occ - maint)
+            // update availability state from SSE
+            setAvailableSlots(avail)
+            // also update local slots array if useful
+            setSlots(mapped)
           } catch (e) {
             // ignore
           }
@@ -109,6 +183,30 @@ export default function SpaceManagement() {
     return () => { if (es) es.close() }
   }, [selectedTab, params.id])
 
+  // when a slot is selected, fetch bookings for this space and filter for that slot
+  useEffect(() => {
+    let mounted = true
+    if (!selectedSlot) {
+      setSlotBookings([])
+      return
+    }
+
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/bookings?space_id=${encodeURIComponent(params.id as string)}`)
+        const j = await res.json().catch(() => ({ data: [] }))
+        const raw = Array.isArray(j.data) ? j.data : []
+        const filtered = raw.filter((b: any) => String(b.slot_id ?? b.slot)?.toString() === String(selectedSlot.id))
+        if (!mounted) return
+        setSlotBookings(filtered)
+      } catch (err) {
+        if (mounted) setSlotBookings([])
+      }
+    })()
+
+    return () => { mounted = false }
+  }, [selectedSlot, params.id])
+
   return (
     <main className="min-h-screen bg-background">
       <div className="border-b border-border bg-card sticky top-0 z-40">
@@ -119,10 +217,10 @@ export default function SpaceManagement() {
             </button>
           </Link>
           <div>
-            <h1 className="text-xl font-bold text-foreground">{spaceDetails.name}</h1>
+            <h1 className="text-xl font-bold text-foreground">{spaceDetails?.space_name ?? 'Parking Space'}</h1>
             <p className="text-xs text-muted-foreground flex items-center gap-1">
               <MapPin className="w-3 h-3" />
-              {spaceDetails.address}
+              {spaceDetails?.address ?? '—'}
             </p>
           </div>
         </div>
@@ -134,10 +232,10 @@ export default function SpaceManagement() {
           <div className="bg-card border border-border rounded-lg p-4">
             <p className="text-xs text-muted-foreground mb-1">Occupancy</p>
             <p className="text-2xl font-bold text-foreground">
-              {Math.round((spaceDetails.occupied / spaceDetails.capacity) * 100)}%
+              {capacity > 0 ? Math.round((occupied / capacity) * 100) : 0}%
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {spaceDetails.occupied}/{spaceDetails.capacity} slots
+              {occupied}/{capacity} slots
             </p>
           </div>
 
@@ -158,7 +256,20 @@ export default function SpaceManagement() {
                   className="flex-1 px-2 py-1 border border-border rounded text-sm bg-background text-foreground"
                 />
                 <button
-                  onClick={() => setEditRate(false)}
+                  onClick={async () => {
+                    // persist rate to DB
+                    try {
+                      const res = await fetch('/api/parking', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ space_id: params.id, hourly_rate: Number(rate) }) })
+                      const j = await res.json().catch(() => ({}))
+                      if (!res.ok) throw new Error(j.error || 'Failed to update rate')
+                      // update local state
+                      setSpaceDetails((s: any) => ({ ...(s || {}), hourly_rate: Number(rate) }))
+                      setEditRate(false)
+                      try { toast({ title: 'Rate updated', description: `₹${rate} per hour` }) } catch (e) {}
+                    } catch (err: any) {
+                      alert(err.message || 'Failed to update rate')
+                    }
+                  }}
                   className="px-2 py-1 bg-primary text-primary-foreground rounded text-xs font-semibold"
                 >
                   Save
@@ -166,7 +277,7 @@ export default function SpaceManagement() {
               </div>
             ) : (
               <div className="flex items-center gap-2">
-                <p className="text-2xl font-bold text-secondary">₹{rate}</p>
+                <p className="text-2xl font-bold text-secondary">₹{spaceDetails?.hourly_rate ?? rate}</p>
                 <button onClick={() => setEditRate(true)} className="text-xs text-primary hover:underline">
                   Edit
                 </button>
@@ -176,8 +287,8 @@ export default function SpaceManagement() {
 
           <div className="bg-card border border-border rounded-lg p-4">
             <p className="text-xs text-muted-foreground mb-1">Managers</p>
-            <p className="text-2xl font-bold text-foreground">{spaceDetails.managers}</p>
-            <Button size="sm" variant="outline" className="w-full mt-2 text-xs bg-transparent">
+            <p className="text-2xl font-bold text-foreground">{spaceDetails?.managers ?? managers.length ?? 0}</p>
+            <Button size="sm" variant="outline" className="w-full mt-2 text-xs bg-transparent" onClick={() => setSelectedTab('managers')}>
               Manage
             </Button>
           </div>
@@ -218,24 +329,15 @@ export default function SpaceManagement() {
                 <h3 className="font-bold text-foreground mb-4">Slot Status</h3>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm">
-                      <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                      Available
-                    </span>
+                    <span className="flex items-center gap-2 text-sm">Available</span>
                     <span className="font-bold text-foreground">{availableSlots}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm">
-                      <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                      Occupied
-                    </span>
-                    <span className="font-bold text-foreground">{spaceDetails.occupied}</span>
+                    <span className="flex items-center gap-2 text-sm">Occupied</span>
+                    <span className="font-bold text-foreground">{occupied}</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="flex items-center gap-2 text-sm">
-                      <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                      Maintenance
-                    </span>
+                    <span className="flex items-center gap-2 text-sm">Maintenance</span>
                     <span className="font-bold text-foreground">{maintenanceSlots}</span>
                   </div>
                 </div>
@@ -243,7 +345,7 @@ export default function SpaceManagement() {
 
               <div className="bg-card border border-border rounded-lg p-6">
                 <h3 className="font-bold text-foreground mb-4">Revenue Today</h3>
-                <p className="text-3xl font-bold text-secondary mb-2">₹{spaceDetails.occupied * spaceDetails.rate}</p>
+                <p className="text-3xl font-bold text-secondary mb-2">₹{occupied * displayRate}</p>
                 <p className="text-xs text-muted-foreground">Based on current occupancy</p>
               </div>
             </div>
@@ -255,19 +357,9 @@ export default function SpaceManagement() {
           <div className="space-y-6">
             <div className="bg-card border border-border rounded-lg p-6">
               <h3 className="font-bold text-foreground mb-4">Parking Slot Status</h3>
-              <div className="grid grid-cols-5 md:grid-cols-10 gap-2">
+              <div className="flex flex-wrap gap-2">
                 {slots.map((slot) => (
-                  <button
-                    key={slot.id}
-                    className={`w-full aspect-square rounded-lg font-bold text-xs transition-colors ${
-                      slot.status === "occupied"
-                        ? "bg-red-100 text-red-700 hover:bg-red-200"
-                        : slot.status === "maintenance"
-                          ? "bg-yellow-100 text-yellow-700"
-                          : "bg-green-100 text-green-700 hover:bg-green-200"
-                    }`}
-                    title={`${slot.number} - ${slot.type} - ${slot.status}`}
-                  >
+                  <button key={slot.id} onClick={() => setSelectedSlot(slot)} title={`${slot.number} - ${slot.type} - ${slot.status}`} className={`px-2 py-1 text-xs rounded-full border ${slot.status === 'occupied' ? 'border-red-300 text-red-700' : slot.status === 'maintenance' ? 'border-yellow-300 text-yellow-700' : 'border-green-300 text-green-700'}`}>
                     {slot.number}
                   </button>
                 ))}
@@ -288,6 +380,50 @@ export default function SpaceManagement() {
                   <span>Maintenance</span>
                 </div>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Map Modal */}
+        {showMap && (
+          <div className="fixed inset-0 z-50 flex items-stretch">
+            <div className="flex-1 p-10">
+              <div className="h-full bg-white rounded-lg shadow-lg overflow-hidden">
+                <div className="flex items-center justify-between p-3 border-b">
+                  <h3 className="font-bold">Map - {spaceDetails?.space_name ?? 'Parking'}</h3>
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setShowMap(false)}>Close</Button>
+                  </div>
+                </div>
+                <div className="h-[600px]">
+                  {typeof window !== 'undefined' && (
+                    <MapClient userPos={null} spaces={[{ space_id: spaceDetails?.space_id ?? params.id, space_name: spaceDetails?.space_name ?? '', address: spaceDetails?.address ?? '', latitude: Number(spaceDetails?.latitude ?? 0), longitude: Number(spaceDetails?.longitude ?? 0), total_slots: Number(spaceDetails?.total_slots ?? slots.length) }]} availability={{ [spaceDetails?.space_id ?? params.id as string]: { available: availableSlots, total: Number(spaceDetails?.total_slots ?? slots.length) } }} />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="w-96 bg-card border-l border-border p-4 overflow-y-auto">
+              <h4 className="font-semibold mb-2">Slot Details</h4>
+              {selectedSlot ? (
+                <div>
+                  <p className="text-sm font-semibold">Slot {selectedSlot.number}</p>
+                  <p className="text-xs text-muted-foreground">Type: {selectedSlot.type}</p>
+                  <p className="text-xs text-muted-foreground">Status: {selectedSlot.status}</p>
+                  <p className="mt-3 text-sm font-semibold">Manager</p>
+                  <p className="text-xs">{(managers[0]?.users?.full_name) ?? 'Manager'}</p>
+                  <div className="mt-3">
+                    <p className="text-sm font-semibold">Sales</p>
+                    <p className="text-xs">₹{slotBookings.reduce((s, b) => s + Number(b.amount ?? b.total_amount ?? 0), 0)}</p>
+                    <p className="text-xs text-muted-foreground">Bookings: {slotBookings.length}</p>
+                  </div>
+                  <div className="mt-4">
+                    <Button size="sm" onClick={() => { /* placeholder for view more analytics */ }} className="w-full">View analytics</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">Select a slot to see details</div>
+              )}
             </div>
           </div>
         )}
@@ -329,11 +465,15 @@ export default function SpaceManagement() {
                 {managers.map((m: any, i: number) => (
                   <div key={i} className="p-4 bg-muted rounded-lg flex items-center justify-between">
                     <div>
-                      <p className="font-semibold text-foreground text-sm">{m.users?.full_name ?? 'Invitee'}</p>
+                      <p className="font-semibold text-foreground text-sm">{m.users?.full_name ?? 'Invitee'} {m.users?.user_id === currentUser?.user_id ? <span className="text-xs text-primary">(You)</span> : null}</p>
                       <p className="text-xs text-muted-foreground">{m.users?.email ?? '—'}</p>
                       <p className="text-xs text-muted-foreground">Status: {m.invite_status}</p>
                     </div>
-                    <span className={`text-xs px-2 py-1 rounded ${m.invite_status === 'accepted' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{m.invite_status}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-1 rounded ${m.invite_status === 'accepted' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>{m.invite_status}</span>
+                      {/* Transfer manager action */}
+                      <Button size="sm" variant="ghost" onClick={() => transferManager(m.users?.user_id)} disabled={m.users?.user_id === currentUser?.user_id}>Make Manager</Button>
+                    </div>
                   </div>
                 ))}
               </div>

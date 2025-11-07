@@ -128,8 +128,11 @@ export default function DriverSignup() {
         throw new Error(json.error || 'Failed to register')
       }
 
-      // Navigate to verification step (session is now in cookie)
-      router.push('/driver/verification')
+      // Navigate to driver dashboard (session is now in cookie)
+      // Small delay to ensure session cookie is set
+      setTimeout(() => {
+        router.push('/driver/dashboard')
+      }, 100)
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.')
     } finally {
@@ -139,18 +142,6 @@ export default function DriverSignup() {
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-primary via-background to-secondary/20">
-      {/* Header */}
-      <div className="border-b border-border bg-background/95 backdrop-blur">
-        <div className="mx-auto max-w-2xl px-4 py-4">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back to Home
-          </Link>
-        </div>
-      </div>
 
       <div className="mx-auto max-w-4xl px-4 py-12">
         <div className="bg-card border border-border rounded-xl p-6 grid md:grid-cols-2 gap-6 items-stretch">
@@ -243,7 +234,7 @@ export default function DriverSignup() {
               )}
             </div>
 
-            <p className="text-center text-sm text-muted-foreground mt-6">Already have an account? <Link href="/driver/login" className="text-primary font-semibold hover:underline">Sign In</Link></p>
+            <p className="text-center text-sm text-muted-foreground mt-6">Already have an account? <Link href="/login" className="text-primary font-semibold hover:underline">Sign In</Link></p>
           </div>
         </div>
       </div>

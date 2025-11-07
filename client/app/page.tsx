@@ -153,7 +153,6 @@ export default function Home() {
         {/* Map + Legend */}
         <div className="mt-12 grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="md:col-span-2 bg-white/60 p-4 card-border card-shadow rounded-lg">
-            <div className="text-sm text-muted-foreground mb-2">Your coordinates: <span className="font-mono">{coordsText || 'permission required'}</span></div>
             <div className="w-full h-80 md:h-[520px] rounded-lg overflow-hidden border border-border">
               {isClient && <MapClient userPos={userPos} spaces={spaces} />}
             </div>

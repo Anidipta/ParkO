@@ -77,6 +77,7 @@ export default function AddParkingSpace() {
         latitude: formData.lat ? Number(formData.lat) : (userPos?.lat ?? null),
         longitude: formData.lng ? Number(formData.lng) : (userPos?.lng ?? null),
         total_slots: Number(formData.capacity || 0),
+        hourly_rate: Number(formData.ratePerHour || 0),
       }
       const res = await fetch('/api/parking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!res.ok) {

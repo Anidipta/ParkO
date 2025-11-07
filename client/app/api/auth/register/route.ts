@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import supabaseAdmin from '@/lib/supabaseServer'
-import { hashPassword, isValidEmail, validatePasswordStrength, isValidPhone } from '@/lib/auth'
+import { hashPassword, isValidEmail, validatePasswordStrength, isValidPhone, createSessionToken } from '@/lib/auth'
+import { setSessionCookie } from '@/lib/session'
 
 /**
  * POST /api/auth/register
@@ -106,10 +107,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Return user data (without password_hash)
+    // Return user data (without password_hash) and set session cookie
     const { password_hash, ...userData } = newUser
 
-    return NextResponse.json(
+    // Create session token (automatically log in the user after registration)
+    const sessionToken = createSessionToken({
+      userId: newUser.user_id,
+      email: newUser.email,
+      userType: newUser.user_type,
+      fullName: newUser.full_name,
+    })
+
+    const response = NextResponse.json(
       {
         success: true,
         message: 'Account created successfully',
@@ -117,6 +126,9 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 }
     )
+
+    // Set session cookie
+    return setSessionCookie(sessionToken, response)
   } catch (error) {
     console.error('Registration error:', error)
     return NextResponse.json(

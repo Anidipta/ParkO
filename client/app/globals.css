@@ -3,11 +3,18 @@
 
 @custom-variant dark (&:is(.dark *));
 
+.card-pattern {
+  background: 
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.7) 100%),
+    radial-gradient(circle at 20% 80%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(16, 185, 129, 0.1) 0%, transparent 50%);
+  backdrop-filter: blur(10px);
+}
+
 :root {
   /* Brand colors */
   --brand: #0EC496; /* mint / primary */
   --brand-dark: #003F79; /* deep blue */
-  /* Updated color scheme to modern tech-forward blue and orange */
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -124,7 +131,12 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    /* Static amber -> brown gradient background as requested. No stripes or animated gradients. */
+    background-image: linear-gradient(180deg, #FFD18B 0%, #a6662b 50%,  #FFD18B 100%);
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+    background-size: cover;
+    color: var(--foreground);
   }
 }
 
@@ -194,16 +206,11 @@
   --glass-border: rgba(3,7,18,0.06);
 }
 
-@keyframes gradientShift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
-}
-
 .running-gradient {
-  background: linear-gradient(90deg, var(--primary) 0%, var(--sidebar-primary) 50%, rgba(14,196,150,0.06) 70%);
-  background-size: 300% 100%;
-  animation: gradientShift 9s ease infinite;
+  /* Neutralized running gradient: static amber->brown->amber to match site background. */
+  background: linear-gradient(90deg, #fae287 0%, #fcbb90 50%, #fae287 100%);
+  background-size: 100% 100%;
+  animation: none;
 }
 
 .card-border {

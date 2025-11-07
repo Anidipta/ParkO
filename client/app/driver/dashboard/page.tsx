@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from 'next/navigation'
 import Link from "next/link"
 import { MapPin, Navigation, LogOut, User, Menu, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -29,20 +30,50 @@ interface Booking {
 export default function DriverDashboard() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [displayName, setDisplayName] = useState<string>('')
-  
-  // fetch session user to personalize greeting
+  const [checkedAuth, setCheckedAuth] = useState(false)
+  const [role, setRole] = useState<string | null>(null)
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
+  const router = useRouter()
+
+  // run an initial auth check. If there's no session, redirect to driver signup.
   useEffect(() => {
-    let ignore = false
-    fetch('/api/auth/session')
-      .then(r => r.ok ? r.json() : null)
-      .then(j => {
-        if (!ignore && j?.user) {
-          const name = j.user.fullName || j.user.full_name || j.user.name || j.user.email || 'Driver'
-          setDisplayName(name)
+    let mounted = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/session', { credentials: 'include' })
+        if (!mounted) return
+        if (!res.ok) {
+          router.replace('/driver/signup')
+          return
         }
-      })
-      .catch(() => {})
-    return () => { ignore = true }
+        const json = await res.json()
+        const user = json?.user
+        const uid = user?.userId ?? user?.user_id ?? null
+        const userRole = user?.user_type ?? user?.userType ?? null
+        const name = user?.fullName || user?.full_name || user?.name || user?.email || ''
+
+        if (!uid) {
+          router.replace('/driver/signup')
+          return
+        }
+
+        // if an owner tries to access driver dashboard, send them to owner dashboard
+        if (userRole === 'owner' || userRole === 'manager') {
+          router.replace('/owner/dashboard')
+          return
+        }
+
+        setAuthUserId(uid)
+        setRole(userRole)
+        setDisplayName(name)
+        setCheckedAuth(true)
+      } catch (err) {
+        console.warn('auth check failed', err)
+        router.replace('/driver/signup')
+      }
+    })()
+    return () => { mounted = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   const [selectedBooking, setSelectedBooking] = useState<string | null>(null)  
   const [userId, setUserId] = useState<string | null>(null)
@@ -55,13 +86,13 @@ export default function DriverDashboard() {
   const currentBooking = bookings.find((b) => b.status === 'active' || b.status === 'upcoming') ?? null
   const pastBookings = bookings.filter((b) => b.status === 'completed')
 
-  // fetch session and bookings
+  // fetch bookings after auth check passes
   useEffect(() => {
+    if (!checkedAuth) return
     let ignore = false
     const load = async () => {
       try {
-        const s = await fetch('/api/auth/session').then((r) => r.ok ? r.json() : null).catch(() => null)
-        const uid = s?.user?.userId ?? s?.user?.user_id ?? null
+        const uid = authUserId
         if (!uid) return
         if (ignore) return
         setUserId(uid)
@@ -87,7 +118,7 @@ export default function DriverDashboard() {
     }
     load()
     return () => { ignore = true }
-  }, [])
+  }, [checkedAuth, authUserId])
 
   // fetch nearby spaces using geolocation then fallback to /api/parking
   useEffect(() => {
@@ -95,6 +126,7 @@ export default function DriverDashboard() {
     const loadSpaces = async () => {
       setLoadingSpaces(true)
       try {
+        if (!checkedAuth) return
         if ('geolocation' in navigator) {
           navigator.geolocation.getCurrentPosition(async (pos) => {
             if (ignore) return
@@ -104,7 +136,15 @@ export default function DriverDashboard() {
               const res = await fetch(`/api/search?lat=${lat}&lng=${lng}&radius=200`)
               const j = await res.json().catch(() => ({}))
               if (res.ok && Array.isArray(j.data)) {
-                const mapped = j.data.map((r: any) => ({ id: r.space.space_id, name: r.space.space_name, distance: r.distance_text ?? '', rate: r.space.rate_per_hour ?? 0, type: r.space.type ?? '', availability: r.available_count ?? 0, nextFree: r.next_free ?? 'Now' }))
+                const mapped = j.data.map((r: any) => ({ 
+                  id: r.space.space_id, 
+                  name: r.space.space_name, 
+                  distance: `${Math.round(r.distance_m)}m`, 
+                  rate: r.cheapest_slot?.hourly_rate ?? 0, 
+                  type: r.cheapest_slot?.slot_type ?? 'Standard', 
+                  availability: r.space.total_slots ?? 0, 
+                  nextFree: 'Now' 
+                }))
                 setNearbySpaces(mapped)
                 return
               }
@@ -118,7 +158,15 @@ export default function DriverDashboard() {
         const res2 = await fetch('/api/parking')
         const j2 = await res2.json().catch(() => ({}))
         if (res2.ok && Array.isArray(j2.data)) {
-          const mapped = j2.data.slice(0, 6).map((s: any) => ({ id: s.space_id, name: s.space_name, distance: '', rate: s.rate_per_hour ?? 0, type: s.type ?? '', availability: s.total_slots ?? 0, nextFree: 'Now' }))
+          const mapped = j2.data.slice(0, 6).map((s: any) => ({ 
+            id: s.space_id, 
+            name: s.space_name, 
+            distance: '', 
+            rate: s.cheapest_rate ?? 0, 
+            type: s.slot_type ?? 'Standard', 
+            availability: s.total_slots ?? 0, 
+            nextFree: 'Now' 
+          }))
           if (!ignore) setNearbySpaces(mapped)
         }
       } catch (err) {
