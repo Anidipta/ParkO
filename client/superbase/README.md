@@ -634,14 +634,6 @@ pg_dump $DATABASE_URL > parko_backup_$(date +%Y%m%d).sql
 
 ---
 
-## Support & Contribution
-
-For issues or questions about the schema:
-1. Check trigger logic in the SQL file
-2. Review sample queries above
-3. Test with small dataset first
-4. Contact the development team
-
 **Last Updated:** November 7, 2025  
 **Schema Version:** 1.0  
 **Compatibility:** PostgreSQL 14+, Supabase
