@@ -1,12 +1,13 @@
 "use client"
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Loader2 } from 'lucide-react'
 
-export default function InviteAcceptPage() {
+function InviteAcceptContent() {
   const params = useSearchParams()
   const router = useRouter()
   const [token, setToken] = useState<string>('')
@@ -76,5 +77,17 @@ export default function InviteAcceptPage() {
         )}
       </div>
     </main>
+  )
+}
+
+export default function InviteAcceptPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    }>
+      <InviteAcceptContent />
+    </Suspense>
   )
 }
