@@ -52,7 +52,7 @@ CREATE TABLE parking_slots (
     slot_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     space_id UUID NOT NULL REFERENCES parking_spaces(space_id) ON DELETE CASCADE,
     slot_number VARCHAR(20) NOT NULL,
-    slot_type VARCHAR(20) CHECK (slot_type IN ('compact', 'standard', 'large', 'handicap', 'electric')) NOT NULL,
+    slot_type VARCHAR(20) CHECK (slot_type IN ('standard', 'near_gate', 'covered', 'women_only', 'disabled', 'ev_charging', 'premium', 'compact')) NOT NULL,
     hourly_rate NUMERIC(10, 2) NOT NULL,
     is_available BOOLEAN DEFAULT TRUE,
     UNIQUE (space_id, slot_number)
@@ -147,8 +147,11 @@ BEGIN
         (CASE WHEN NEW.plate_number IS NOT NULL THEN 25 ELSE 0 END) +
         (CASE WHEN NEW.pan_card_number IS NOT NULL THEN 25 ELSE 0 END);
     
-    IF NEW.profile_completion_percentage = 100 AND NEW.verification_status = 'verified' THEN
+    -- Auto-verify and enable booking if all required fields are present
+    IF NEW.license_number IS NOT NULL AND NEW.plate_number IS NOT NULL AND NEW.pan_card_number IS NOT NULL THEN
+        NEW.verification_status := 'verified';
         NEW.can_book := TRUE;
+        NEW.profile_completion_percentage := 100;
     END IF;
     
     RETURN NEW;

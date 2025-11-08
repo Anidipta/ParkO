@@ -2,9 +2,13 @@
 
 import { useState } from "react"
 import { useEffect } from "react"
+import { useRouter } from 'next/navigation'
 import Link from "next/link"
 import { Plus, MapPin, Users, TrendingUp, LogOut, Menu, X, Edit2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import VerifyEntryModal from "@/components/VerifyEntryModal"
+import CountdownTimer from "@/components/CountdownTimer"
+import EndBookingModal from "@/components/EndBookingModal"
 
 interface ParkingSpace {
   id: string
@@ -18,34 +22,80 @@ interface ParkingSpace {
 
 interface Booking {
   id: string
+  booking_id: string
   driver: string
   space: string
+  space_id: string
+  slot_type: string
   startTime: string
   endTime: string
   amount: number
   status: "active" | "completed" | "pending"
+  otp_entry?: string
+  rawData?: any
 }
 
 export default function OwnerDashboard() {
+  const router = useRouter()
   const [menuOpen, setMenuOpen] = useState(false)
   const [selectedTab, setSelectedTab] = useState<"overview" | "spaces" | "managers">("overview")
   const [spaces, setSpaces] = useState<ParkingSpace[]>([])
   const [recentBookings, setRecentBookings] = useState<Booking[]>([])
   const [loadingSpaces, setLoadingSpaces] = useState(true)
   const [loadingBookings, setLoadingBookings] = useState(true)
+  const [displayName, setDisplayName] = useState<string>('')
+  const [checkedAuth, setCheckedAuth] = useState(false)
+  const [ownerId, setOwnerId] = useState<string | null>(null)
+  const [verifyModalBooking, setVerifyModalBooking] = useState<any | null>(null)
+  const [endBookingModalBooking, setEndBookingModalBooking] = useState<any | null>(null)
+
+  // Authentication check - redirect if not owner
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/session', { credentials: 'include' })
+        if (!mounted) return
+        if (!res.ok) {
+          router.replace('/owner/signup')
+          return
+        }
+        const json = await res.json()
+        const user = json?.user
+        const uid = user?.userId ?? user?.user_id ?? null
+        const userRole = user?.user_type ?? user?.userType ?? null
+        const name = user?.fullName || user?.full_name || user?.name || user?.email || ''
+
+        if (!uid) {
+          router.replace('/owner/signup')
+          return
+        }
+
+        // If a driver tries to access owner dashboard, send them to driver dashboard
+        if (userRole === 'driver') {
+          router.replace('/driver/dashboard')
+          return
+        }
+
+        setOwnerId(uid)
+        setDisplayName(name)
+        setCheckedAuth(true)
+      } catch (err) {
+        console.warn('auth check failed', err)
+        router.replace('/owner/signup')
+      }
+    })()
+    return () => { mounted = false }
+  }, [router])
 
   // Load owner's session, then fetch spaces and bookings from APIs.
   useEffect(() => {
+    if (!checkedAuth || !ownerId) return
     let mounted = true
     async function loadSpacesAndBookings() {
       try {
-        // Get session to identify owner (if available)
-        const sessRes = await fetch('/api/auth/session', { credentials: 'include' })
-        const sessJson = await sessRes.json().catch(() => ({}))
-        const ownerId = sessJson?.user?.userId ?? sessJson?.user?.user_id ?? null
-
-        // Fetch spaces belonging to this owner (if ownerId available) otherwise fetch active spaces
-        const spacesUrl = ownerId ? `/api/parking?owner_id=${encodeURIComponent(ownerId)}` : '/api/parking'
+        // Fetch spaces belonging to this owner
+        const spacesUrl = `/api/parking?owner_id=${encodeURIComponent(ownerId!)}`
         setLoadingSpaces(true)
         const spRes = await fetch(spacesUrl, { credentials: 'include' })
         const spJson = await spRes.json().catch(() => ({ data: [] }))
@@ -73,15 +123,25 @@ export default function OwnerDashboard() {
               const res = await fetch(`/api/bookings?space_id=${encodeURIComponent(sp.id)}`, { credentials: 'include' })
               const j = await res.json().catch(() => ({ data: [] }))
               const raw = Array.isArray(j.data) ? j.data : []
-              return raw.map((b: any) => ({
-                id: b.booking_id ?? b.id ?? String(b.id ?? ''),
-                driver: b.users?.full_name ?? b.driver_name ?? b.driver ?? 'Driver',
-                space: sp.name,
-                startTime: b.start_time ? new Date(b.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (b.start_time ?? ''),
-                endTime: b.end_time ? new Date(b.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (b.end_time ?? ''),
-                amount: Number(b.estimated_amount ?? b.amount ?? 0),
-                status: (b.booking_status ?? b.status ?? 'pending') as Booking['status'],
-              }))
+              return raw.map((b: any) => {
+                const startDate = b.start_time ? new Date(b.start_time) : null
+                const endDate = b.end_time ? new Date(b.end_time) : null
+                
+                return {
+                  id: b.booking_id ?? b.id ?? String(b.id ?? ''),
+                  booking_id: b.booking_id ?? b.id ?? String(b.id ?? ''),
+                  driver: b.users?.full_name ?? b.driver_name ?? b.driver ?? 'Driver',
+                  space: sp.name,
+                  space_id: sp.id,
+                  slot_type: b.slot_type ?? 'standard',
+                  startTime: startDate && !isNaN(startDate.getTime()) ? startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '00:00',
+                  endTime: endDate && !isNaN(endDate.getTime()) ? endDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '00:00',
+                  amount: Number(b.estimated_amount ?? b.amount ?? 0),
+                  status: (b.booking_status ?? b.status ?? 'pending') as Booking['status'],
+                  otp_entry: b.otp_entry,
+                  rawData: b, // Keep raw data for modal
+                }
+              })
             } catch (err) {
               return []
             }
@@ -112,7 +172,7 @@ export default function OwnerDashboard() {
     return () => {
       mounted = false
     }
-  }, [])
+  }, [checkedAuth, ownerId])
 
   const totalEarnings = spaces.reduce((sum, space) => sum + space.occupied * space.rate, 0)
   const totalOccupancy = Math.round(
@@ -145,10 +205,20 @@ export default function OwnerDashboard() {
 
   return (
     <main className="min-h-screen">
+      {!checkedAuth ? (
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      ) : (
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
-          <h2 className="text-3xl font-bold text-foreground mb-2">Welcome back, Premium Parking</h2>
+          <h2 className="text-3xl font-bold text-foreground mb-2">
+            Welcome back{displayName ? `, ${displayName}` : ''}
+          </h2>
           <p className="text-muted-foreground">Manage your parking spaces and track earnings</p>
         </div>
 
@@ -246,35 +316,135 @@ export default function OwnerDashboard() {
               </div>
             </div>
             <div>
-              <h3 className="text-xl font-bold text-foreground mb-4">Recent Bookings</h3>
-              <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="divide-y divide-border">
+              <h3 className="text-xl font-bold text-foreground mb-6">Recent Bookings</h3>
+              {loadingBookings ? (
+                <div className="text-center py-12">
+                  <p className="text-muted-foreground">Loading bookings...</p>
+                </div>
+              ) : recentBookings.length === 0 ? (
+                <div className="bg-card border border-border rounded-lg p-8 text-center">
+                  <p className="text-lg font-semibold text-foreground mb-2">No bookings yet</p>
+                  <p className="text-sm text-muted-foreground">Bookings will appear here when drivers make reservations</p>
+                </div>
+              ) : (
+                <div className="grid md:grid-cols-3 gap-6">
                   {recentBookings.map((booking) => (
                     <div
                       key={booking.id}
-                      className="p-4 flex items-center justify-between hover:bg-muted transition-colors"
+                      className="bg-card border border-border rounded-lg p-6 hover:shadow-lg transition-shadow"
                     >
-                      <div className="flex-1">
-                        <p className="font-semibold text-foreground">{booking.driver}</p>
+                      {/* Status Badge */}
+                      <div className="flex items-center justify-between mb-4">
+                        <span className={`text-xs font-semibold px-3 py-1 rounded-full ${
+                          booking.status === 'active' ? 'bg-green-100 text-green-700' :
+                          booking.status === 'pending' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {booking.status === 'active' ? '🟢 Active' : 
+                           booking.status === 'pending' ? '🔵 Confirmed' : 
+                           '⚪ Completed'}
+                        </span>
+                        <p className="text-sm font-bold text-primary">₹{booking.amount}</p>
+                      </div>
+
+                      {/* Booking Info */}
+                      <div className="mb-4">
+                        <h4 className="font-bold text-foreground text-lg mb-1">{booking.driver}</h4>
+                        <p className="text-sm text-muted-foreground font-semibold">
+                          {booking.space}
+                        </p>
                         <p className="text-sm text-muted-foreground">
-                          {booking.space} • {booking.startTime}-{booking.endTime}
+                          {booking.startTime} - {booking.endTime}
                         </p>
                       </div>
-                      <div className="text-right">
-                        <p className="font-bold text-foreground">₹{booking.amount}</p>
-                        <p
-                          className={`text-xs font-semibold ${
-                            booking.status === "active" ? "text-green-600" : "text-muted-foreground"
-                          }`}
-                        >
-                          {booking.status.charAt(0).toUpperCase() + booking.status.slice(1)}
-                        </p>
+
+                      {/* Entry OTP Display - For pending bookings */}
+                      {booking.status === 'pending' && (
+                        <div className="bg-blue-50 rounded-lg p-3 mb-4">
+                          <p className="text-xs font-semibold text-muted-foreground mb-1">Expected Entry</p>
+                          <p className="text-sm text-blue-600 font-semibold">{booking.startTime}</p>
+                        </div>
+                      )}
+
+                      {/* Countdown Timer - For active bookings */}
+                      {booking.status === 'active' && (
+                        <div className="mb-4">
+                          <CountdownTimer
+                            endTime={booking.endTime}
+                            startTime={booking.startTime}
+                            onTimeout={() => {
+                              console.log('Booking overtime:', booking.id)
+                            }}
+                            showOvertime={true}
+                          />
+                        </div>
+                      )}
+
+                      {/* Action Buttons */}
+                      <div className="space-y-2">
+                        {booking.status === 'pending' && (
+                          <Button 
+                            className="w-full"
+                            size="sm"
+                            onClick={() => setVerifyModalBooking(booking)}
+                          >
+                            Verify Entry
+                          </Button>
+                        )}
+                        
+                        {booking.status === 'active' && (
+                          <Button 
+                            variant="destructive"
+                            className="w-full"
+                            size="sm"
+                            onClick={() => setEndBookingModalBooking(booking)}
+                          >
+                            End Booking
+                          </Button>
+                        )}
+                        
+                        {booking.status === 'completed' && (
+                          <Button 
+                            variant="outline"
+                            className="w-full"
+                            size="sm"
+                            disabled
+                          >
+                            Completed
+                          </Button>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              </div>
+              )}
             </div>
+            
+            {/* Verify Entry Modal */}
+            {verifyModalBooking && (
+              <VerifyEntryModal
+                booking={verifyModalBooking}
+                onClose={() => setVerifyModalBooking(null)}
+                onSuccess={() => {
+                  setVerifyModalBooking(null)
+                  // Reload bookings after successful verification
+                  window.location.reload()
+                }}
+              />
+            )}
+            
+            {/* End Booking Modal */}
+            {endBookingModalBooking && (
+              <EndBookingModal
+                booking={endBookingModalBooking}
+                onClose={() => setEndBookingModalBooking(null)}
+                onSuccess={() => {
+                  setEndBookingModalBooking(null)
+                  // Reload bookings after ending
+                  window.location.reload()
+                }}
+              />
+            )}
           </div>
         )}
 
@@ -367,6 +537,7 @@ export default function OwnerDashboard() {
           </div>
         )}
       </div>
+      )}
     </main>
   )
 }

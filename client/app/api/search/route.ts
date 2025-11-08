@@ -28,24 +28,50 @@ export async function GET(req: NextRequest) {
     const { data: spaces, error } = await supabaseAdmin.from('parking_spaces').select('space_id, space_name, address, latitude, longitude, total_slots').limit(500)
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
 
-    // for each space, fetch cheapest available slot matching slot_type if provided
+    // for each space, fetch cheapest available slot group matching slot_type if provided
     const results: any[] = []
     for (const s of (spaces as any[])) {
       const dist = haversine(lat, lng, Number(s.latitude), Number(s.longitude))
       if (dist > radius) continue
 
-      // find cheapest available slot
-      let q = supabaseAdmin.from('parking_slots').select('*').eq('space_id', s.space_id).eq('is_available', true)
-      if (slot_type) q = q.eq('slot_type', slot_type)
-      q = q.order('hourly_rate', { ascending: true }).limit(1)
-      const { data: slotData } = await q
-      const cheapest = (slotData as any)?.[0]
-      if (!cheapest) continue
+      // Fetch all slot groups for this space to calculate total availability
+      const { data: allSlots } = await supabaseAdmin
+        .from('parking_slots')
+        .select('*')
+        .eq('space_id', s.space_id)
+      
+      if (!allSlots || allSlots.length === 0) continue
+      
+      // Calculate total available slots across all groups
+      const totalAvailable = allSlots.reduce((sum: number, slot: any) => 
+        sum + (slot.available_count ?? 0), 0)
+      
+      if (totalAvailable === 0) continue // Skip if no available slots
+      
+      // Find cheapest available slot group matching slot_type if provided
+      let cheapestSlot = null
+      if (slot_type) {
+        const filtered = allSlots.filter((slot: any) => 
+          slot.slot_type === slot_type && (slot.available_count ?? 0) > 0)
+        cheapestSlot = filtered.sort((a: any, b: any) => 
+          Number(a.hourly_rate) - Number(b.hourly_rate))[0]
+      } else {
+        const available = allSlots.filter((slot: any) => (slot.available_count ?? 0) > 0)
+        cheapestSlot = available.sort((a: any, b: any) => 
+          Number(a.hourly_rate) - Number(b.hourly_rate))[0]
+      }
+      
+      if (!cheapestSlot) continue // Skip if no matching slots
 
-      if (min_rate != null && Number(cheapest.hourly_rate) < min_rate) continue
-      if (max_rate != null && Number(cheapest.hourly_rate) > max_rate) continue
+      if (min_rate != null && Number(cheapestSlot.hourly_rate) < min_rate) continue
+      if (max_rate != null && Number(cheapestSlot.hourly_rate) > max_rate) continue
 
-      results.push({ space: s, distance_m: Math.round(dist), cheapest_slot: cheapest })
+      results.push({ 
+        space: s, 
+        distance_m: Math.round(dist), 
+        cheapest_slot: cheapestSlot,
+        total_available: totalAvailable // Total available across all slot types
+      })
     }
 
     // sort by distance

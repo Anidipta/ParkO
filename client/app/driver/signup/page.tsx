@@ -6,9 +6,10 @@ import { useState, useEffect } from "react"
 import Link from "next/link"
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
-import { ArrowLeft, AlertCircle } from "lucide-react"
+import { ArrowLeft, AlertCircle, Camera } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 export default function DriverSignup() {
   const [step, setStep] = useState(1)
@@ -16,6 +17,11 @@ export default function DriverSignup() {
     name: "",
     email: "",
     phone: "",
+    // Document fields
+    documentType: "", // 'license' | 'plate' | 'pan'
+    licenseNumber: "",
+    plateNumber: "",
+    panNumber: "",
     password: "",
     confirmPassword: "",
   })
@@ -71,16 +77,44 @@ export default function DriverSignup() {
       setError("Please enter a valid email address")
       return false
     }
+    if (!formData.phone.trim()) {
+      setError("Phone number is required")
+      return false
+    }
+    const phoneRegex = /^[+]?[0-9]{10,15}$/
+    if (!phoneRegex.test(formData.phone.replace(/[\s()-]/g, ''))) {
+      setError("Please enter a valid phone number (10-15 digits)")
+      return false
+    }
     return true
   }
 
   const validateStep2 = () => {
-    if (formData.phone && formData.phone.trim()) {
-      const phoneRegex = /^[+]?[0-9]{10,15}$/
-      if (!phoneRegex.test(formData.phone.replace(/[\s()-]/g, ''))) {
-        setError("Please enter a valid phone number (10-15 digits)")
-        return false
-      }
+    // All 3 documents are required
+    if (!formData.licenseNumber.trim()) {
+      setError("License number is required")
+      return false
+    }
+    if (!formData.plateNumber.trim()) {
+      setError("Car plate number is required")
+      return false
+    }
+    if (!formData.panNumber.trim()) {
+      setError("PAN ID is required")
+      return false
+    }
+    // Basic validation
+    if (formData.licenseNumber.trim().length < 5) {
+      setError("License number must be at least 5 characters")
+      return false
+    }
+    if (formData.plateNumber.trim().length < 4) {
+      setError("Plate number must be at least 4 characters")
+      return false
+    }
+    if (formData.panNumber.trim().length < 10) {
+      setError("PAN ID must be at least 10 characters")
+      return false
     }
     return true
   }
@@ -92,18 +126,6 @@ export default function DriverSignup() {
     }
     if (formData.password.length < 8) {
       setError("Password must be at least 8 characters long")
-      return false
-    }
-    if (!/[A-Z]/.test(formData.password)) {
-      setError("Password must contain at least one uppercase letter")
-      return false
-    }
-    if (!/[a-z]/.test(formData.password)) {
-      setError("Password must contain at least one lowercase letter")
-      return false
-    }
-    if (!/[0-9]/.test(formData.password)) {
-      setError("Password must contain at least one number")
       return false
     }
     if (formData.password !== formData.confirmPassword) {
@@ -140,8 +162,12 @@ export default function DriverSignup() {
           email: formData.email,
           password: formData.password,
           fullName: formData.name,
-          phone: formData.phone || undefined,
-          userType: 'driver'
+          phone: formData.phone,
+          userType: 'driver',
+          // Document fields
+          licenseNumber: formData.licenseNumber,
+          plateNumber: formData.plateNumber,
+          panNumber: formData.panNumber,
         }),
       })
 
@@ -198,22 +224,74 @@ export default function DriverSignup() {
             {step === 1 && (
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm font-semibold text-foreground mb-2 block">Full Name</label>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Full Name *</label>
                   <Input name="name" value={formData.name} onChange={handleChange} placeholder="John Doe" className="w-full" />
                 </div>
                 <div>
-                  <label className="text-sm font-semibold text-foreground mb-2 block">Email</label>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Email *</label>
                   <Input name="email" type="email" value={formData.email} onChange={handleChange} placeholder="john@example.com" className="w-full" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Phone Number *</label>
+                  <Input name="phone" type="tel" value={formData.phone} onChange={handleChange} placeholder="+1 555-000-0000" className="w-full" />
+                  <p className="text-xs text-muted-foreground mt-1">10-15 digits, may start with +</p>
                 </div>
               </div>
             )}
 
             {step === 2 && (
-              <div className="space-y-4">
-                <div>
-                  <label className="text-sm font-semibold text-foreground mb-2 block">Phone Number (Optional)</label>
-                  <Input name="phone" type="tel" value={formData.phone} onChange={handleChange} placeholder="+1 555-000-0000" className="w-full" />
-                  <p className="text-xs text-muted-foreground mt-1">10-15 digits, may start with +</p>
+              <div className="space-y-6">
+                <p className="text-sm text-muted-foreground">Please provide all 3 documents to complete verification</p>
+                
+                {/* License Number */}
+                <div className="border border-border rounded-lg p-4 bg-card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Camera className="w-5 h-5 text-primary" />
+                    </div>
+                    <label className="text-sm font-semibold text-foreground">License Number *</label>
+                  </div>
+                  <Input 
+                    name="licenseNumber" 
+                    value={formData.licenseNumber} 
+                    onChange={handleChange} 
+                    placeholder="Enter license number" 
+                    className="w-full" 
+                  />
+                </div>
+
+                {/* Plate Number */}
+                <div className="border border-border rounded-lg p-4 bg-card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Camera className="w-5 h-5 text-primary" />
+                    </div>
+                    <label className="text-sm font-semibold text-foreground">Car Plate Number *</label>
+                  </div>
+                  <Input 
+                    name="plateNumber" 
+                    value={formData.plateNumber} 
+                    onChange={handleChange} 
+                    placeholder="Enter plate number" 
+                    className="w-full" 
+                  />
+                </div>
+
+                {/* PAN Number */}
+                <div className="border border-border rounded-lg p-4 bg-card">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Camera className="w-5 h-5 text-primary" />
+                    </div>
+                    <label className="text-sm font-semibold text-foreground">PAN ID *</label>
+                  </div>
+                  <Input 
+                    name="panNumber" 
+                    value={formData.panNumber} 
+                    onChange={handleChange} 
+                    placeholder="Enter PAN number" 
+                    className="w-full" 
+                  />
                 </div>
               </div>
             )}
@@ -221,16 +299,12 @@ export default function DriverSignup() {
             {step === 3 && (
               <div className="space-y-4">
                 <div>
-                  <label className="text-sm font-semibold text-foreground mb-2 block">Password</label>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Password *</label>
                   <Input name="password" type="password" value={formData.password} onChange={handleChange} placeholder="••••••••" className="w-full" />
-                  <ul className="text-xs text-muted-foreground mt-2 space-y-1">
-                    <li>• At least 8 characters long</li>
-                    <li>• Contains uppercase and lowercase letters</li>
-                    <li>• Contains at least one number</li>
-                  </ul>
+                  <p className="text-xs text-muted-foreground mt-1">At least 8 characters</p>
                 </div>
                 <div>
-                  <label className="text-sm font-semibold text-foreground mb-2 block">Confirm Password</label>
+                  <label className="text-sm font-semibold text-foreground mb-2 block">Confirm Password *</label>
                   <Input name="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleChange} placeholder="••••••••" className="w-full" />
                 </div>
               </div>

@@ -16,8 +16,11 @@ export async function GET(req: NextRequest) {
 
         const send = async () => {
           try {
-            // fetch current slots for space (include hourly_rate so clients can show updated prices)
-            const { data: slots } = await supabaseAdmin.from('parking_slots').select('slot_id, slot_number, slot_type, is_available, hourly_rate').eq('space_id', spaceId)
+            // fetch current slot groups for space (include hourly_rate, slot_count, and available_count for live updates)
+            const { data: slots } = await supabaseAdmin
+              .from('parking_slots')
+              .select('slot_id, slot_type, slot_count, available_count, hourly_rate')
+              .eq('space_id', spaceId)
             const payload = { time: new Date().toISOString(), slots }
             const text = JSON.stringify(payload)
             if (text !== lastSent) {

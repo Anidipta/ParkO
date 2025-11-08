@@ -35,6 +35,66 @@ export default function AddParkingSpace() {
     compact: 0,
   })
 
+  // Bulk slot input
+  const [bulkSlotInput, setBulkSlotInput] = useState("")
+
+  const parseBulkSlotInput = (input: string) => {
+    // Parse format: "standard - 10, spl woman - 10, near gate - 2, ev - 10"
+    const newCounts: Record<string, number> = {
+      near_gate: 0,
+      disabled: 0,
+      women_only: 0,
+      ev_charging: 0,
+      premium: 0,
+      compact: 0,
+    }
+    const newSpecialTypes: string[] = []
+
+    const parts = input.split(',').map(p => p.trim())
+    
+    for (const part of parts) {
+      const match = part.match(/^(.+?)\s*-\s*(\d+)$/)
+      if (!match) continue
+      
+      const [, typeStr, countStr] = match
+      const typeLower = typeStr.trim().toLowerCase()
+      const count = parseInt(countStr)
+      
+      // Map user input to database slot_type
+      if (typeLower === 'standard' || typeLower === 'normal') {
+        // Standard slots are auto-calculated, ignore
+      } else if (typeLower === 'near gate' || typeLower === 'neargate') {
+        newCounts.near_gate = count
+      } else if (typeLower === 'spl woman' || typeLower === 'women only' || typeLower === 'women') {
+        newCounts.women_only = count
+        if (!newSpecialTypes.includes('women_only')) newSpecialTypes.push('women_only')
+      } else if (typeLower === 'ev' || typeLower === 'ev charging') {
+        newCounts.ev_charging = count
+        if (!newSpecialTypes.includes('ev_charging')) newSpecialTypes.push('ev_charging')
+      } else if (typeLower === 'disabled' || typeLower === 'accessible') {
+        newCounts.disabled = count
+        if (!newSpecialTypes.includes('disabled')) newSpecialTypes.push('disabled')
+      } else if (typeLower === 'premium' || typeLower === 'vip') {
+        newCounts.premium = count
+        if (!newSpecialTypes.includes('premium')) newSpecialTypes.push('premium')
+      } else if (typeLower === 'compact') {
+        newCounts.compact = count
+        if (!newSpecialTypes.includes('compact')) newSpecialTypes.push('compact')
+      }
+    }
+    
+    setSlotCounts(newCounts)
+    setSpecialSlotTypes(newSpecialTypes)
+  }
+
+  const handleBulkSlotChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value
+    setBulkSlotInput(value)
+    if (value.trim()) {
+      parseBulkSlotInput(value)
+    }
+  }
+
   const availableSpecialTypes = [
     { value: 'disabled', label: 'Disabled/Accessible' },
     { value: 'women_only', label: 'Women Only' },
@@ -151,55 +211,78 @@ export default function AddParkingSpace() {
         throw new Error('Space created but ID not returned')
       }
 
-      // Create slots for each type
+      // Create slot groups (not individual slots)
       const slotPromises: Promise<any>[] = []
+      const baseRate = Number(formData.ratePerHour || 0)
       
-      // Normal slots
-      for (let i = 1; i <= normalSlotsCount; i++) {
+      // Helper function to calculate rate based on slot type
+      const calculateRate = (slotType: string): number => {
+        switch (slotType) {
+          case 'standard':
+            return baseRate // No markup
+          case 'near_gate':
+          case 'covered':
+            return baseRate * 1.02 // +2%
+          case 'women_only':
+          case 'disabled':
+            return baseRate * 1.05 // +5%
+          case 'ev_charging':
+          case 'premium':
+          case 'compact':
+            return baseRate * 1.08 // +8%
+          default:
+            return baseRate
+        }
+      }
+      
+      // Create standard slots group if there are any
+      if (normalSlotsCount > 0) {
         slotPromises.push(
           fetch('/api/slots', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               space_id: spaceId,
-              slot_number: `N${i}`,
               slot_type: 'standard',
-              hourly_rate: Number(formData.ratePerHour || 0),
+              slot_count: normalSlotsCount,
+              available_count: normalSlotsCount,
+              hourly_rate: calculateRate('standard'),
             })
           })
         )
       }
       
-      // Near gate slots
-      for (let i = 1; i <= slotCounts.near_gate; i++) {
+      // Create near_gate slots group
+      if (slotCounts.near_gate > 0) {
         slotPromises.push(
           fetch('/api/slots', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               space_id: spaceId,
-              slot_number: `G${i}`,
               slot_type: 'near_gate',
-              hourly_rate: Number(formData.ratePerHour || 0),
+              slot_count: slotCounts.near_gate,
+              available_count: slotCounts.near_gate,
+              hourly_rate: calculateRate('near_gate'),
             })
           })
         )
       }
       
-      // Special slot types
+      // Create special slot type groups
       for (const type of specialSlotTypes) {
         const count = slotCounts[type]
-        for (let i = 1; i <= count; i++) {
-          const prefix = type.charAt(0).toUpperCase()
+        if (count > 0) {
           slotPromises.push(
             fetch('/api/slots', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 space_id: spaceId,
-                slot_number: `${prefix}${i}`,
                 slot_type: type,
-                hourly_rate: Number(formData.ratePerHour || 0),
+                slot_count: count,
+                available_count: count,
+                hourly_rate: calculateRate(type),
               })
             })
           )
@@ -317,6 +400,24 @@ export default function AddParkingSpace() {
                       <span className="text-sm text-foreground">{type.label}</span>
                     </label>
                   ))}
+                </div>
+
+                {/* Bulk slot input */}
+                <div className="mt-4">
+                  <label className="text-sm font-semibold text-foreground mb-2 block">
+                    Quick Slot Setup (Optional)
+                  </label>
+                  <textarea
+                    value={bulkSlotInput}
+                    onChange={handleBulkSlotChange}
+                    placeholder="standard - 10, spl woman - 10, near gate - 2, ev - 10"
+                    className="w-full px-3 py-2 text-sm border border-border rounded-lg font-mono"
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Format: "type - count, type - count". 
+                    Supported: standard, near gate, spl woman, ev, disabled, premium, compact
+                  </p>
                 </div>
 
                 {/* Slot count inputs in 3 columns */}

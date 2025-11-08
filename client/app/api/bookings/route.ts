@@ -10,16 +10,31 @@ import supabaseAdmin from '@/lib/supabaseServer'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { driver_id, space_id, slot_id, slot_type, start_time, end_time } = body
+    const { driver_id, space_id, slot_id, slot_type, start_time, end_time, hourly_rate } = body
 
     if (!driver_id || !space_id) return new Response(JSON.stringify({ error: 'Missing driver_id or space_id' }), { status: 400 })
+
+    // Fetch driver profile to get license plate (no longer required in request body)
+    const { data: driverProfile, error: profileError } = await supabaseAdmin
+      .from('driver_profiles')
+      .select('plate_number, license_number')
+      .eq('user_id', driver_id)
+      .single()
+
+    if (profileError || !driverProfile) {
+      return new Response(JSON.stringify({ error: 'Driver profile not found' }), { status: 404 })
+    }
+
+    if (!driverProfile.plate_number) {
+      return new Response(JSON.stringify({ error: 'Please complete your profile with vehicle plate number' }), { status: 400 })
+    }
 
     const start = start_time ? new Date(start_time) : new Date()
     const end = end_time ? new Date(end_time) : new Date(start.getTime() + 2 * 60 * 60 * 1000) // default 2 hours
 
     // determine slot
     let chosenSlotId = slot_id
-    let hourlyRate = 0
+    let slotHourlyRate = hourly_rate ? Number(hourly_rate) : 0
 
     if (!chosenSlotId) {
       // find first available slot in the space that's not booked for the requested time range
@@ -48,7 +63,7 @@ export async function POST(req: NextRequest) {
       if (!availableSlot) return new Response(JSON.stringify({ error: 'No available slots for the requested time' }), { status: 409 })
       
       chosenSlotId = availableSlot.slot_id
-      hourlyRate = Number(availableSlot.hourly_rate ?? 0)
+      slotHourlyRate = Number(availableSlot.hourly_rate ?? 0)
     } else {
       // Validate that the specific slot is not already booked for the requested time
       const { data: overlapping } = await supabaseAdmin
@@ -64,12 +79,22 @@ export async function POST(req: NextRequest) {
         return new Response(JSON.stringify({ error: 'Slot is already booked for this time range' }), { status: 409 })
       }
 
-      const { data: slotData } = await supabaseAdmin.from('parking_slots').select('*').eq('slot_id', chosenSlotId).limit(1)
-      hourlyRate = Number((slotData as any)?.[0]?.hourly_rate ?? 0)
+      // Get hourly rate for the chosen slot
+      const { data: slotData } = await supabaseAdmin
+        .from('parking_slots')
+        .select('hourly_rate')
+        .eq('slot_id', chosenSlotId)
+        .single()
+      
+      if (!slotData) {
+        return new Response(JSON.stringify({ error: 'Slot not found' }), { status: 404 })
+      }
+      
+      slotHourlyRate = Number(slotData.hourly_rate ?? 0)
     }
 
     const hours = Math.max(0.25, (end.getTime() - start.getTime()) / (1000 * 60 * 60))
-    const estimated = Math.round(hours * hourlyRate * 100) / 100
+    const estimated = Math.round(hours * slotHourlyRate * 100) / 100
 
     const insertPayload = {
       driver_id,
@@ -81,13 +106,26 @@ export async function POST(req: NextRequest) {
       booking_status: 'pending',
     }
 
-    const { data, error } = await supabaseAdmin.from('bookings').insert([insertPayload])
+    const { data, error } = await supabaseAdmin
+      .from('bookings')
+      .insert([insertPayload])
+      .select() // Must select to return inserted data
+    
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+    
+    if (!data || data.length === 0) {
+      return new Response(JSON.stringify({ error: 'Failed to create booking' }), { status: 500 })
+    }
 
-    const booking = (data as any)[0]
+    const booking = data[0]
 
-  // create initial payment record (pending)
-  await supabaseAdmin.from('payments').insert([{ booking_id: booking.booking_id, estimated_amount: estimated, payment_method: 'card', payment_status: 'pending' }])
+    // create initial payment record (pending)
+    await supabaseAdmin.from('payments').insert([{ 
+      booking_id: booking.booking_id, 
+      estimated_amount: estimated, 
+      payment_method: 'card', 
+      payment_status: 'pending' 
+    }])
 
     return new Response(JSON.stringify({ data: booking }), { status: 201, headers: { 'Content-Type': 'application/json' } })
   } catch (err: any) {
@@ -103,7 +141,11 @@ export async function GET(req: NextRequest) {
 
     let q = supabaseAdmin
       .from('bookings')
-      .select('*, users(full_name, email)')
+      .select(`
+        *, 
+        users(full_name, email),
+        parking_spaces(space_name, address, latitude, longitude)
+      `)
       .limit(500)
       
     if (driverId) q = q.eq('driver_id', driverId)

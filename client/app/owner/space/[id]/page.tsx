@@ -16,6 +16,8 @@ interface Slot {
   status: "available" | "occupied" | "maintenance"
   type: "standard" | "premium" | "disabled"
   hourly_rate?: number
+  slot_count?: number // Total slots of this type (for grouped slots)
+  available_count?: number // Available slots of this type (for grouped slots)
   currentBooking?: { driver: string; endTime: string }
 }
 
@@ -74,12 +76,15 @@ export default function SpaceManagement() {
       .then((res) => res.json())
       .then((json) => {
         const raw = Array.isArray(json.data) ? json.data : []
+        // Map slot groups to display format
         const mapped: Slot[] = raw.map((slot: any) => ({
-          id: slot.slot_id ?? slot.id ?? slot.slot_number,
-          number: slot.slot_number ?? String(slot.slot_id ?? ''),
-          status: slot.is_available === true ? 'available' : slot.is_available === false ? 'occupied' : 'maintenance',
+          id: slot.slot_id ?? slot.id,
+          number: slot.slot_type ?? String(slot.slot_id ?? ''), // Use slot_type as identifier for groups
+          status: 'available', // Not used for grouped slots
           type: slot.slot_type ?? 'standard',
           hourly_rate: slot.hourly_rate ?? 0,
+          slot_count: slot.slot_count ?? 0, // Total slots of this type
+          available_count: slot.available_count ?? 0, // Available slots of this type
           currentBooking: undefined,
         }))
         setSlots(mapped)
@@ -89,12 +94,13 @@ export default function SpaceManagement() {
 
   // derive counts when slots or space details update
   useEffect(() => {
-    const occ = slots.filter((s) => s.status === 'occupied').length
-    const maint = slots.filter((s) => s.status === 'maintenance').length
-    const cap = Number(spaceDetails?.total_slots ?? slots.length ?? 0)
-    const avail = Math.max(0, cap - occ - maint)
-    setMaintenanceSlots(maint)
-    setAvailableSlots(avail)
+    // For grouped slots, sum up the counts from all slot groups
+    const totalAvailable = slots.reduce((sum, slot) => sum + (slot.available_count ?? 0), 0)
+    const totalSlotCount = slots.reduce((sum, slot) => sum + (slot.slot_count ?? 0), 0)
+    const totalOccupied = totalSlotCount - totalAvailable
+    
+    setAvailableSlots(totalAvailable)
+    setMaintenanceSlots(0) // Maintenance not tracked in grouped slots
   }, [slots, spaceDetails])
 
   // when space details load, initialize rate state from DB
@@ -104,8 +110,11 @@ export default function SpaceManagement() {
     }
   }, [spaceDetails])
 
-  const occupied = slots.filter((s) => s.status === 'occupied').length
-  const capacity = spaceDetails?.total_slots ?? slots.length
+  // Calculate occupied and capacity from grouped slots
+  const totalSlotCount = slots.reduce((sum, slot) => sum + (slot.slot_count ?? 0), 0)
+  const totalAvailable = slots.reduce((sum, slot) => sum + (slot.available_count ?? 0), 0)
+  const occupied = totalSlotCount - totalAvailable
+  const capacity = spaceDetails?.total_slots ?? totalSlotCount
   // prefer explicit space hourly_rate when available
   const displayRate = Number(spaceDetails?.hourly_rate ?? spaceDetails?.cheapest_rate ?? Number(rate) ?? 0)
 
@@ -285,15 +294,83 @@ export default function SpaceManagement() {
                 />
                 <button
                   onClick={async () => {
-                    // persist rate to DB
+                    // persist rate to DB and update all slot rates
                     try {
-                      const res = await fetch('/api/parking', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ space_id: params.id, hourly_rate: Number(rate) }) })
+                      const newBaseRate = Number(rate)
+                      
+                      // Update the parking space base rate
+                      const res = await fetch('/api/parking', { 
+                        method: 'PATCH', 
+                        headers: { 'Content-Type': 'application/json' }, 
+                        body: JSON.stringify({ 
+                          space_id: params.id, 
+                          hourly_rate: newBaseRate 
+                        }) 
+                      })
                       const j = await res.json().catch(() => ({}))
                       if (!res.ok) throw new Error(j.error || 'Failed to update rate')
+                      
+                      // Calculate and update slot rates based on their types
+                      const slotTypeMarkups: Record<string, number> = {
+                        'standard': 1.0,
+                        'near_gate': 1.02,
+                        'women_only': 1.05,
+                        'disabled': 1.05,
+                        'ev_charging': 1.08,
+                        'premium': 1.08,
+                        'compact': 1.0,
+                      }
+                      
+                      // Fetch current slots and update their rates
+                      const slotsRes = await fetch(`/api/slots?space_id=${params.id}`)
+                      const slotsJson = await slotsRes.json().catch(() => ({}))
+                      if (slotsRes.ok && Array.isArray(slotsJson.data)) {
+                        // Update each slot group's rate
+                        const updatePromises = slotsJson.data.map((slot: any) => {
+                          const slotType = slot.slot_type || 'standard'
+                          const markup = slotTypeMarkups[slotType] || 1.0
+                          const newSlotRate = Number((newBaseRate * markup).toFixed(2))
+                          
+                          return fetch('/api/slots', {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              slot_id: slot.slot_id,
+                              hourly_rate: newSlotRate
+                            })
+                          })
+                        })
+                        
+                        await Promise.all(updatePromises)
+                      }
+                      
                       // update local state
-                      setSpaceDetails((s: any) => ({ ...(s || {}), hourly_rate: Number(rate) }))
+                      setSpaceDetails((s: any) => ({ ...(s || {}), hourly_rate: newBaseRate }))
                       setEditRate(false)
-                      try { toast({ title: 'Rate updated', description: `₹${rate} per hour` }) } catch (e) {}
+                      
+                      // Refresh slots to show updated rates
+                      const refreshRes = await fetch(`/api/slots?space_id=${params.id}`)
+                      const refreshJson = await refreshRes.json().catch(() => ({}))
+                      if (refreshRes.ok && Array.isArray(refreshJson.data)) {
+                        const mapped: Slot[] = refreshJson.data.map((slot: any) => ({
+                          id: slot.slot_id ?? slot.id,
+                          number: slot.slot_type ?? String(slot.slot_id ?? ''), // Use slot_type as identifier for groups
+                          status: 'available', // Not used for grouped slots
+                          type: slot.slot_type ?? 'standard',
+                          hourly_rate: slot.hourly_rate ?? 0,
+                          slot_count: slot.slot_count ?? 0, // Total slots of this type
+                          available_count: slot.available_count ?? 0, // Available slots of this type
+                          currentBooking: undefined,
+                        }))
+                        setSlots(mapped)
+                      }
+                      
+                      try { 
+                        toast({ 
+                          title: 'Rates updated', 
+                          description: `Base rate: ₹${rate}/hr. All slot rates updated automatically.` 
+                        }) 
+                      } catch (e) {}
                     } catch (err: any) {
                       alert(err.message || 'Failed to update rate')
                     }
@@ -384,106 +461,73 @@ export default function SpaceManagement() {
         {selectedTab === "slots" && (
           <div className="space-y-6">
             <div className="bg-card border border-border rounded-lg p-6">
-              <h3 className="font-bold text-foreground mb-4">Parking Slot Management</h3>
-              <div className="overflow-x-auto">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="font-bold text-foreground text-lg">Slot Overview by Type</h3>
+                <p className="text-sm text-muted-foreground">
+                  Total: {slots.reduce((sum, slot) => sum + (slot.slot_count ?? 0), 0)} slots in {slots.length} types
+                </p>
+              </div>
+              
+              {/* Summary Table by Slot Type */}
+              <div className="overflow-x-auto mb-8">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-border">
-                      <th className="text-left py-2 px-3">Slot</th>
-                      <th className="text-left py-2 px-3">Type</th>
-                      <th className="text-left py-2 px-3">Status</th>
-                      <th className="text-left py-2 px-3">Rate (₹/hr)</th>
-                      <th className="text-left py-2 px-3">Actions</th>
+                    <tr className="border-b-2 border-border bg-muted/50">
+                      <th className="text-left py-3 px-4 font-semibold">Slot Type</th>
+                      <th className="text-left py-3 px-4 font-semibold">Rate (₹/hr)</th>
+                      <th className="text-left py-3 px-4 font-semibold">Available</th>
+                      <th className="text-left py-3 px-4 font-semibold">Booked</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {slots.map((slot) => (
-                      <tr key={slot.id} className="border-b border-border hover:bg-muted/50">
-                        <td className="py-3 px-3 font-medium">{slot.number}</td>
-                        <td className="py-3 px-3 capitalize">{slot.type}</td>
-                        <td className="py-3 px-3">
-                          <span className={`px-2 py-1 text-xs rounded-full ${
-                            slot.status === 'available' ? 'bg-green-100 text-green-700' :
-                            slot.status === 'maintenance' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-red-100 text-red-700'
-                          }`}>
-                            {slot.status}
-                          </span>
-                        </td>
-                        <td className="py-3 px-3">
-                          {editingSlotId === slot.id ? (
-                            <div className="flex gap-2 items-center">
-                              <input
-                                type="number"
-                                value={editingSlotRate}
-                                onChange={(e) => setEditingSlotRate(e.target.value)}
-                                className="w-24 px-2 py-1 border border-border rounded text-sm bg-background"
-                                autoFocus
-                              />
-                              <button
-                                onClick={() => {
-                                  const newRate = Number(editingSlotRate)
-                                  if (newRate > 0) {
-                                    updateSlotRate(slot.id, newRate)
-                                  }
-                                }}
-                                className="px-2 py-1 bg-primary text-primary-foreground rounded text-xs"
-                              >
-                                Save
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setEditingSlotId(null)
-                                  setEditingSlotRate("")
-                                }}
-                                className="px-2 py-1 bg-muted text-foreground rounded text-xs"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold">₹{slot.hourly_rate ?? 0}</span>
-                              <button
-                                onClick={() => {
-                                  setEditingSlotId(slot.id)
-                                  setEditingSlotRate(String(slot.hourly_rate ?? 0))
-                                }}
-                                className="text-xs text-primary hover:underline"
-                              >
-                                Edit
-                              </button>
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-3 px-3">
-                          <button
-                            onClick={() => setSelectedSlot(slot)}
-                            className="text-xs text-primary hover:underline"
-                          >
-                            View Details
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      // For grouped slots, we already have the data we need
+                      // Each slot in the array represents a slot group with slot_count and available_count
+                      const typeNames: Record<string, string> = {
+                        'standard': 'Standard',
+                        'near_gate': 'Near Gate',
+                        'women_only': 'Women Only',
+                        'disabled': 'Disabled/Accessible',
+                        'ev_charging': 'EV Charging',
+                        'premium': 'Premium/VIP',
+                        'compact': 'Compact',
+                      }
+
+                      return slots.map((slotGroup: any) => {
+                        const type = slotGroup.type || 'standard'
+                        const totalCount = slotGroup.slot_count ?? 0
+                        const availableCount = slotGroup.available_count ?? 0
+                        const bookedCount = totalCount - availableCount
+
+                        return (
+                          <tr key={type} className="border-b border-border hover:bg-muted/30 transition-colors">
+                            <td className="py-4 px-4">
+                              <span className="font-medium text-foreground">
+                                {typeNames[type] || type}
+                              </span>
+                              <span className="text-xs text-muted-foreground ml-2">
+                                ({totalCount} total)
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="font-bold text-primary">₹{slotGroup.hourly_rate ?? 0}</span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="inline-flex items-center gap-2 px-3 py-1 bg-green-100 text-green-700 rounded-full font-semibold">
+                                {availableCount}
+                              </span>
+                            </td>
+                            <td className="py-4 px-4">
+                              <span className="inline-flex items-center gap-2 px-3 py-1 bg-orange-100 text-orange-700 rounded-full font-semibold">
+                                {bookedCount}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    })()}
                   </tbody>
                 </table>
-              </div>
-
-              {/* Legend */}
-              <div className="flex flex-wrap gap-4 mt-6 pt-6 border-t border-border">
-                <div className="flex items-center gap-2 text-sm">
-                  <div className="w-6 h-6 bg-green-100 rounded"></div>
-                  <span>Available</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <div className="w-6 h-6 bg-red-100 rounded"></div>
-                  <span>Occupied</span>
-                </div>
-                <div className="flex items-center gap-2 text-sm">
-                  <div className="w-6 h-6 bg-yellow-100 rounded"></div>
-                  <span>Maintenance</span>
-                </div>
               </div>
             </div>
           </div>

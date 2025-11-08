@@ -21,6 +21,11 @@ export default function BookingPage() {
   const [timeAwareAvailability, setTimeAwareAvailability] = useState<{ available_count: number, total_slots: number, occupied_count: number } | null>(null)
   const [activeBookings, setActiveBookings] = useState<any[]>([])
   const [loadingBookings, setLoadingBookings] = useState(false)
+  const [nextAvailableTimes, setNextAvailableTimes] = useState<Record<string, string>>({})
+  
+  // New states for slot selection
+  const [selectedSlotType, setSelectedSlotType] = useState<string>('standard')
+  const [selectedSlot, setSelectedSlot] = useState<any | null>(null) // Specific slot chosen by driver
 
   // Fetch real parking space details
   useEffect(() => {
@@ -83,25 +88,106 @@ export default function BookingPage() {
     return () => { if (es) es.close() }
   }, [params.id])
 
-  // compute hourly rate from slots (cheapest available slot) and total amount
-  const hourlyRate = (() => {
-    if (slots && slots.length > 0) {
-      // prefer cheapest available slot, otherwise cheapest overall
-      const available = slots.filter((s: any) => s.is_available)
-      const pickFrom = available.length > 0 ? available : slots
-      const cheapest = pickFrom.reduce((acc: any, s: any) => {
-        const rate = Number(s.hourly_rate ?? 0)
-        return (acc === null || rate < acc) ? rate : acc
-      }, null)
-      return cheapest ?? space?.hourly_rate ?? space?.cheapest_rate ?? 60
-    }
-    return space?.hourly_rate ?? space?.cheapest_rate ?? 60
-  })()
-  const totalAmount = duration * hourlyRate
+  // Fetch next available times for full slot types
+  useEffect(() => {
+    if (!slots || slots.length === 0) return
+    const spaceId = Array.isArray(params.id) ? params.id[0] : params.id
+    if (!spaceId) return
+    
+    // Find slot types that are full (available_count === 0)
+    const fullSlotTypes = slots.filter((slotGroup: any) => {
+      return Number(slotGroup.available_count ?? 0) === 0
+    })
+    
+    // Fetch next available time for each full slot type
+    fullSlotTypes.forEach(async (slotGroup: any) => {
+      try {
+        const res = await fetch(`/api/bookings/next-available?space_id=${encodeURIComponent(spaceId)}&slot_type=${encodeURIComponent(slotGroup.slot_type)}`)
+        const json = await res.json()
+        if (res.ok && json.nextAvailable) {
+          const time = new Date(json.nextAvailable).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          setNextAvailableTimes(prev => ({
+            ...prev,
+            [slotGroup.slot_type]: time
+          }))
+        }
+      } catch (err) {
+        console.warn('Failed to fetch next available time:', err)
+      }
+    })
+  }, [slots, params.id])
 
-  // Use time-aware availability if available, fallback to simple is_available check
-  const availableCount = timeAwareAvailability?.available_count ?? (slots?.filter(s => s.is_available).length ?? 0)
-  const totalSlots = timeAwareAvailability?.total_slots ?? (slots?.length ?? space?.total_slots ?? 0)
+  // compute hourly rate from slots based on selected slot type
+  const getSlotTypeMarkup = (slotType: string): { multiplier: number, percentage: string } => {
+    switch (slotType) {
+      case 'standard':
+        return { multiplier: 1.0, percentage: '0%' }
+      case 'near_gate':
+        return { multiplier: 1.02, percentage: '+2%' }
+      case 'women_only':
+      case 'disabled':
+        return { multiplier: 1.05, percentage: '+5%' }
+      case 'ev_charging':
+      case 'premium':
+      case 'compact':
+        return { multiplier: 1.08, percentage: '+8%' }
+      default:
+        return { multiplier: 1.0, percentage: '0%' }
+    }
+  }
+  
+  // Get base rate (cheapest standard slot) - REMOVED, now fetch from database
+  // Get slot type rates grouped by type
+  const slotTypeRates = (() => {
+    const rates: Record<string, { rate: number; count: number; available: number }> = {}
+    if (!slots || slots.length === 0) return rates
+    
+    slots.forEach((slotGroup: any) => {
+      const type = slotGroup.slot_type || 'standard'
+      const rate = Number(slotGroup.hourly_rate ?? 0)
+      const total = Number(slotGroup.slot_count ?? 0)
+      const available = Number(slotGroup.available_count ?? 0)
+      
+      if (isNaN(rate)) return
+      
+      rates[type] = { 
+        rate, 
+        count: total,
+        available 
+      }
+    })
+    
+    return rates
+  })()
+  
+  // Get available slot types from grouped rates (show all types now, including full ones)
+  const allSlotTypes = Object.keys(slotTypeRates)
+  
+  // Get current rate for selected slot type (directly from database)
+  const currentSlotGroup = slots?.find((s: any) => s.slot_type === selectedSlotType)
+  const hourlyRate = currentSlotGroup ? Number(currentSlotGroup.hourly_rate ?? 60) : 60
+  const totalAmount = Number((duration * hourlyRate).toFixed(2))
+  const availableCountForType = currentSlotGroup ? Number(currentSlotGroup.available_count ?? 0) : 0
+  
+  // Get slot type display name
+  const getSlotTypeName = (type: string): string => {
+    const names: Record<string, string> = {
+      'standard': 'Normal',
+      'near_gate': 'Near Gate',
+      'women_only': 'Women Only',
+      'disabled': 'Disabled/Accessible',
+      'ev_charging': 'EV Charging',
+      'premium': 'Premium/VIP',
+      'compact': 'Compact Cars'
+    }
+    return names[type] || type
+  }
+
+  // Use time-aware availability if available, fallback to calculating from slot groups
+  const availableCount = timeAwareAvailability?.available_count ?? 
+    (slots?.reduce((sum: number, slot: any) => sum + Number(slot.available_count ?? 0), 0) ?? 0)
+  const totalSlots = timeAwareAvailability?.total_slots ?? 
+    (slots?.reduce((sum: number, slot: any) => sum + Number(slot.slot_count ?? 0), 0) ?? space?.total_slots ?? 0)
   const occupiedCount = timeAwareAvailability?.occupied_count ?? (totalSlots - availableCount)
 
   // Fetch time-aware availability when user changes time/duration
@@ -160,10 +246,22 @@ export default function BookingPage() {
 
   const handleBooking = () => {
     if (step === "time") {
+      // Validate slot selection before proceeding to payment
+      if (!selectedSlot) {
+        alert('Please select a parking slot')
+        return
+      }
       setStep("payment")
     } else if (step === "payment") {
       ;(async () => {
         try {
+          // Validate slot is still selected
+          if (!selectedSlot) {
+            alert('Please select a parking slot')
+            setStep("time")
+            return
+          }
+
           // Get current user from session
           const sessionRes = await fetch('/api/auth/session', { credentials: 'include' })
           if (!sessionRes.ok) throw new Error('You must be signed in to book')
@@ -181,7 +279,15 @@ export default function BookingPage() {
           const res = await fetch('/api/bookings', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ driver_id, space_id: params.id, start_time: start.toISOString(), end_time: end.toISOString(), hourly_rate: hourlyRate }),
+            body: JSON.stringify({ 
+              driver_id, 
+              space_id: params.id,
+              slot_id: selectedSlot.slot_id, // Send the slot group ID
+              start_time: start.toISOString(), 
+              end_time: end.toISOString(), 
+              hourly_rate: selectedSlot.hourly_rate, // Use the slot group's rate
+              slot_type: selectedSlotType,
+            }),
           })
           const json = await res.json()
           if (!res.ok) throw new Error(json.error || 'Booking failed')
@@ -242,73 +348,190 @@ export default function BookingPage() {
         </div>
       </div>
 
+      {/* Slot Type Selector */}
+      {allSlotTypes.length > 0 && (
+        <div>
+          <label className="text-sm font-semibold text-foreground mb-2 block">Select Parking Slot Type</label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {allSlotTypes.map((type: string) => {
+              const { rate, available } = slotTypeRates[type]
+              const isFull = available === 0
+              const nextAvailable = nextAvailableTimes[type]
+              
+              return (
+                <button
+                  key={type}
+                  onClick={() => {
+                    if (!isFull) {
+                      setSelectedSlotType(type)
+                      // Auto-select the slot group for this type
+                      const slotGroup = slots?.find((s: any) => s.slot_type === type)
+                      setSelectedSlot(slotGroup)
+                    }
+                  }}
+                  disabled={isFull}
+                  className={`p-4 rounded-lg border text-left transition-colors ${
+                    isFull 
+                      ? "bg-yellow-50 border-yellow-400 cursor-not-allowed opacity-90"
+                      : selectedSlotType === type
+                      ? "bg-primary/10 border-primary ring-2 ring-primary/50"
+                      : "border-border hover:border-primary/50"
+                  }`}
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <span className={`font-semibold text-sm ${isFull ? 'text-yellow-700' : 'text-foreground'}`}>
+                      {getSlotTypeName(type)}
+                    </span>
+                    {selectedSlotType === type && !isFull && (
+                      <span className="text-xs bg-primary text-primary-foreground px-2 py-0.5 rounded">
+                        ✓
+                      </span>
+                    )}
+                    {isFull && (
+                      <span className="text-xs bg-yellow-500 text-white px-2 py-0.5 rounded">
+                        FULL
+                      </span>
+                    )}
+                  </div>
+                  <p className={`text-lg font-bold mb-1 ${isFull ? 'text-yellow-600' : 'text-primary'}`}>
+                    ₹{!isNaN(rate) ? rate.toFixed(2) : '0.00'}
+                  </p>
+                  {isFull && nextAvailable ? (
+                    <p className="text-xs text-yellow-700 font-semibold">
+                      Next: {nextAvailable}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {available} slot{available !== 1 ? 's' : ''} available
+                    </p>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Pricing Info Card */}
       <div className="bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/20 rounded-lg p-5">
         <div className="flex items-start justify-between mb-4">
           <div>
             <p className="text-sm text-muted-foreground mb-1">Hourly Rate</p>
-            <p className="text-3xl font-bold text-primary">₹{hourlyRate}</p>
+            <p className="text-3xl font-bold text-primary">
+              ₹{!isNaN(hourlyRate) ? hourlyRate.toFixed(2) : '0.00'}
+            </p>
             <p className="text-xs text-muted-foreground mt-1">per hour</p>
           </div>
           <div className="text-right">
             <p className="text-sm text-muted-foreground mb-1">Total Cost</p>
-            <p className="text-2xl font-bold text-foreground">₹{totalAmount}</p>
+            <p className="text-2xl font-bold text-foreground">
+              ₹{!isNaN(totalAmount) ? totalAmount.toFixed(2) : '0.00'}
+            </p>
             <p className="text-xs text-muted-foreground mt-1">for {duration}h</p>
           </div>
         </div>
         
         <div className="border-t border-primary/20 pt-4">
-          <p className="text-xs text-muted-foreground mb-2">Price breakdown:</p>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Base rate × Duration</span>
-            <span className="font-semibold">₹{hourlyRate} × {duration}h = ₹{totalAmount}</span>
+          <p className="text-xs text-muted-foreground mb-2">Price calculation:</p>
+          <div className="space-y-1">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Selected slot rate</span>
+              <span className="font-semibold">
+                ₹{!isNaN(hourlyRate) ? hourlyRate.toFixed(2) : '0.00'}/hr
+              </span>
+            </div>
+            <div className="flex justify-between text-sm font-semibold pt-2 border-t border-primary/10">
+              <span className="text-foreground">Total ({duration}h)</span>
+              <span className="text-primary">₹{!isNaN(totalAmount) ? totalAmount.toFixed(2) : '0.00'}</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Availability Card */}
+      {/* Availability Card - Shows selected slot type availability */}
       <div className="bg-card border border-border rounded-lg p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-semibold text-foreground">Space Availability</h3>
+          <h3 className="font-semibold text-foreground">
+            {selectedSlotType ? `${getSlotTypeName(selectedSlotType)} Slot Availability` : 'Space Availability'}
+          </h3>
           {timeAwareAvailability && (
             <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded">Live</span>
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-4 mb-4">
-          <div className="text-center p-3 bg-green-50 border border-green-200 rounded-lg">
-            <div className="text-2xl font-bold text-green-600">{availableCount}</div>
-            <div className="text-xs text-green-700 mt-1">Available</div>
+        {selectedSlotType ? (
+          /* Show availability for selected slot type */
+          <div>
+            <div className="grid grid-cols-2 gap-4 mb-4">
+              <div className="text-center p-4 bg-green-50 border border-green-200 rounded-lg">
+                <div className="text-3xl font-bold text-green-600">{availableCountForType}</div>
+                <div className="text-xs text-green-700 mt-1">Available</div>
+              </div>
+              <div className="text-center p-4 bg-orange-50 border border-orange-200 rounded-lg">
+                <div className="text-3xl font-bold text-orange-600">
+                  {currentSlotGroup ? (currentSlotGroup.slot_count - availableCountForType) : 0}
+                </div>
+                <div className="text-xs text-orange-700 mt-1">Booked</div>
+              </div>
+            </div>
+            <div className="bg-primary/10 rounded p-3 mb-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-foreground">Rate</span>
+                <span className="text-lg font-bold text-primary">₹{hourlyRate}/hr</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-foreground">Total Capacity</span>
+                <span className="text-sm font-bold text-foreground">
+                  {currentSlotGroup ? currentSlotGroup.slot_count : 0} slots
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="text-center p-3 bg-red-50 border border-red-200 rounded-lg">
-            <div className="text-2xl font-bold text-red-600">{occupiedCount}</div>
-            <div className="text-xs text-red-700 mt-1">Occupied</div>
+        ) : (
+          /* Show overall space availability */
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="text-center p-3 bg-green-50 border border-green-200 rounded-lg">
+              <div className="text-2xl font-bold text-green-600">{availableCount}</div>
+              <div className="text-xs text-green-700 mt-1">Available</div>
+            </div>
+            <div className="text-center p-3 bg-red-50 border border-red-200 rounded-lg">
+              <div className="text-2xl font-bold text-red-600">{occupiedCount}</div>
+              <div className="text-xs text-red-700 mt-1">Occupied</div>
+            </div>
+            <div className="text-center p-3 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="text-2xl font-bold text-blue-600">{totalSlots}</div>
+              <div className="text-xs text-blue-700 mt-1">Total Slots</div>
+            </div>
           </div>
-          <div className="text-center p-3 bg-blue-50 border border-blue-200 rounded-lg">
-            <div className="text-2xl font-bold text-blue-600">{totalSlots}</div>
-            <div className="text-xs text-blue-700 mt-1">Total Slots</div>
-          </div>
-        </div>
+        )}
 
         <div className="bg-muted/50 rounded p-3">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-foreground">Occupancy Rate</span>
+            <span className="text-sm font-medium text-foreground">
+              {selectedSlotType ? 'Utilization Rate' : 'Occupancy Rate'}
+            </span>
             <span className="text-sm font-bold text-foreground">
-              {totalSlots > 0 ? Math.round((occupiedCount / totalSlots) * 100) : 0}%
+              {selectedSlotType && currentSlotGroup
+                ? Math.round(((currentSlotGroup.slot_count - availableCountForType) / currentSlotGroup.slot_count) * 100)
+                : totalSlots > 0 ? Math.round((occupiedCount / totalSlots) * 100) : 0}%
             </span>
           </div>
           <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
             <div 
               className="bg-gradient-to-r from-green-500 to-primary h-2 rounded-full transition-all"
-              style={{ width: `${totalSlots > 0 ? (occupiedCount / totalSlots) * 100 : 0}%` }}
+              style={{ 
+                width: `${selectedSlotType && currentSlotGroup
+                  ? ((currentSlotGroup.slot_count - availableCountForType) / currentSlotGroup.slot_count) * 100
+                  : totalSlots > 0 ? (occupiedCount / totalSlots) * 100 : 0}%` 
+              }}
             ></div>
           </div>
         </div>
 
-        {availableCount === 0 && (
+        {availableCountForType === 0 && selectedSlotType && (
           <div className="mt-4 bg-orange-50 border border-orange-200 rounded-lg p-3">
-            <p className="text-sm text-orange-800 font-semibold">⚠️ No slots available for selected time</p>
-            <p className="text-xs text-orange-700 mt-1">Try a different time or duration</p>
+            <p className="text-sm text-orange-800 font-semibold">⚠️ No {getSlotTypeName(selectedSlotType)} slots available</p>
+            <p className="text-xs text-orange-700 mt-1">Try a different slot type or time</p>
           </div>
         )}
       </div>
@@ -354,6 +577,24 @@ export default function BookingPage() {
         <h3 className="font-bold text-foreground mb-4 text-lg">Booking Summary</h3>
 
         <div className="space-y-4">
+          {/* Selected Slot Display */}
+          {selectedSlot && (
+            <div className="bg-gradient-to-br from-primary/10 to-primary/5 border-2 border-primary/30 rounded-lg p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Selected Slot Type</p>
+                  <p className="text-2xl font-bold text-primary">{getSlotTypeName(selectedSlot.slot_type || selectedSlotType)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-muted-foreground mb-1">Available</p>
+                  <span className="inline-block text-lg bg-primary text-primary-foreground px-3 py-1.5 rounded-full font-bold">
+                    {selectedSlot.available_count || 1}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Location */}
           <div className="flex items-start gap-3 pb-4 border-b border-border">
             <MapPin className="w-5 h-5 text-primary mt-0.5" />
@@ -379,7 +620,9 @@ export default function BookingPage() {
           <div className="bg-muted/50 rounded-lg p-4 space-y-3">
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Hourly Rate</span>
-              <span className="font-semibold text-foreground">₹{hourlyRate}/hr</span>
+              <span className="font-semibold text-foreground">
+                ₹{!isNaN(hourlyRate) ? hourlyRate.toFixed(2) : '0.00'}/hr
+              </span>
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Duration</span>
@@ -387,11 +630,15 @@ export default function BookingPage() {
             </div>
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Subtotal</span>
-              <span className="font-semibold text-foreground">₹{totalAmount}</span>
+              <span className="font-semibold text-foreground">
+                ₹{!isNaN(totalAmount) ? totalAmount.toFixed(2) : '0.00'}
+              </span>
             </div>
             <div className="border-t border-border pt-3 flex justify-between">
               <span className="font-bold text-foreground">Total Amount</span>
-              <span className="text-2xl font-bold text-primary">₹{totalAmount}</span>
+              <span className="text-2xl font-bold text-primary">
+                ₹{!isNaN(totalAmount) ? totalAmount.toFixed(2) : '0.00'}
+              </span>
             </div>
           </div>
 
@@ -482,11 +729,35 @@ export default function BookingPage() {
             </p>
           </div>
 
-          {/* Slot Info */}
-          {bookingResult?.slot_id && (
+          {/* Slot Info - Enhanced */}
+          {selectedSlot && (
             <div className="border-t border-border pt-4">
-              <p className="text-sm text-muted-foreground mb-1">Assigned Slot</p>
-              <p className="font-bold text-foreground text-lg">Slot #{bookingResult.slot_id.slice(-8)}</p>
+              <p className="text-sm text-muted-foreground mb-2">Your Parking Slot Type</p>
+              <div className="bg-gradient-to-br from-green-50 to-green-100 border-2 border-green-500 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <div>
+                    <p className="text-xs text-green-700 font-medium mb-1">SLOT TYPE</p>
+                    <p className="text-2xl font-bold text-green-900">
+                      {getSlotTypeName(selectedSlot.slot_type || selectedSlotType)}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs text-green-700 font-medium mb-1">AVAILABLE</p>
+                    <span className="inline-block text-lg bg-green-700 text-white px-3 py-2 rounded-full font-bold">
+                      {selectedSlot.available_count || 1}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex items-center justify-between pt-3 border-t border-green-300">
+                  <span className="text-xs text-green-700">Rate</span>
+                  <span className="text-lg font-bold text-green-900">
+                    ₹{selectedSlot.hourly_rate}/hr
+                  </span>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2 text-center">
+                ✓ One slot of this type has been reserved for you
+              </p>
             </div>
           )}
 
@@ -511,8 +782,38 @@ export default function BookingPage() {
           {/* Amount */}
           <div className="border-t border-border pt-4">
             <p className="text-sm text-muted-foreground mb-1">Total Amount</p>
-            <p className="text-3xl font-bold text-primary">₹{bookingResult?.estimated_amount ?? totalAmount}</p>
+            <p className="text-3xl font-bold text-primary">
+              ₹{!isNaN(Number(bookingResult?.estimated_amount ?? totalAmount)) 
+                ? Number(bookingResult?.estimated_amount ?? totalAmount).toFixed(2) 
+                : totalAmount.toFixed(2)}
+            </p>
           </div>
+
+          {/* Entry OTP */}
+          {bookingResult?.otp_entry && (
+            <div className="border-t border-border pt-4">
+              <p className="text-sm text-muted-foreground mb-1">Entry OTP</p>
+              <p className="text-4xl font-bold text-green-600 tracking-wider font-mono">
+                {bookingResult.otp_entry}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">Show this code at the gate</p>
+            </div>
+          )}
+
+          {/* QR Code */}
+          {bookingResult?.qr_code_url && (
+            <div className="border-t border-border pt-4">
+              <p className="text-sm text-muted-foreground mb-2">QR Code for Entry/Exit</p>
+              <div className="bg-white p-4 rounded-lg inline-block">
+                <img 
+                  src={bookingResult.qr_code_url} 
+                  alt="Booking QR Code" 
+                  className="w-48 h-48"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">Scan this at entry and exit</p>
+            </div>
+          )}
 
           {/* Status */}
           <div className="border-t border-border pt-4">

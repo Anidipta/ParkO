@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from "next/link"
 import { MapPin, Navigation, LogOut, User, Menu, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import BookingDetailsModal from "@/components/BookingDetailsModal"
 
 interface ParkingSpace {
   id: string
@@ -25,6 +26,8 @@ interface Booking {
   endTime: string
   amount: number
   status: "active" | "completed" | "upcoming"
+  slot_type?: string
+  rawData?: any
 }
 
 export default function DriverDashboard() {
@@ -82,6 +85,7 @@ export default function DriverDashboard() {
   const [nearbySpaces, setNearbySpaces] = useState<ParkingSpace[]>([])
   const [loadingBookings, setLoadingBookings] = useState(false)
   const [loadingSpaces, setLoadingSpaces] = useState(false)
+  const [detailsModalBooking, setDetailsModalBooking] = useState<any | null>(null)
 
   // current and past computed from bookings
   const currentBooking = bookings.find((b) => b.status === 'active' || b.status === 'upcoming') ?? null
@@ -101,15 +105,23 @@ export default function DriverDashboard() {
         const res = await fetch(`/api/bookings?driver_id=${encodeURIComponent(uid)}`)
         const j = await res.json().catch(() => ({}))
         if (res.ok && Array.isArray(j.data)) {
-          setBookings(j.data.map((bk: any) => ({
-            id: bk.booking_id,
-            space: bk.space_id || bk.space_name || 'Unknown',
-            date: bk.start_time ? new Date(bk.start_time).toLocaleDateString() : '',
-            startTime: bk.start_time ? new Date(bk.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-            endTime: bk.end_time ? new Date(bk.end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '',
-            amount: bk.estimated_amount ?? 0,
-            status: bk.booking_status ?? 'upcoming'
-          })))
+          setBookings(j.data.map((bk: any) => {
+            const startDate = bk.start_time ? new Date(bk.start_time) : null
+            const endDate = bk.end_time ? new Date(bk.end_time) : null
+            
+            return {
+              id: bk.booking_id,
+              name: bk.space_name,
+              space: bk.parking_spaces?.address || 'Unknown Location',
+              date: startDate && !isNaN(startDate.getTime()) ? startDate.toLocaleDateString() : 'N/A',
+              startTime: startDate && !isNaN(startDate.getTime()) ? startDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '00:00',
+              endTime: endDate && !isNaN(endDate.getTime()) ? endDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '00:00',
+              amount: bk.estimated_amount ?? 0,
+              status: bk.booking_status ?? 'upcoming',
+              slot_type: bk.slot_type,
+              rawData: bk, // Store full booking data for modal
+            }
+          }))
         }
       } catch (err) {
         console.warn('load bookings failed', err)
@@ -156,13 +168,15 @@ export default function DriverDashboard() {
               const res = await fetch(`/api/search?lat=${lat}&lng=${lng}&radius=200`)
               const j = await res.json().catch(() => ({}))
               if (res.ok && Array.isArray(j.data)) {
-                const mapped = j.data.map((r: any) => ({ 
+                // Filter to only show spaces within 200m (double-check)
+                const filtered = j.data.filter((r: any) => r.distance_m <= 200)
+                const mapped = filtered.map((r: any) => ({ 
                   id: r.space.space_id, 
                   name: r.space.space_name, 
                   distance: `${Math.round(r.distance_m)}m`, 
                   rate: r.cheapest_slot?.hourly_rate ?? 0, 
                   type: r.cheapest_slot?.slot_type ?? 'Standard', 
-                  availability: r.space.total_slots ?? 0, 
+                  availability: r.total_available ?? 0, // Use total available from API
                   nextFree: 'Now' 
                 }))
                 setNearbySpaces(mapped)
@@ -171,47 +185,14 @@ export default function DriverDashboard() {
             } catch (e) {
               console.warn(e)
             }
-          }, () => {}, { enableHighAccuracy: true })
-        }
-
-        // fallback: fetch all parking spaces
-        const res2 = await fetch('/api/parking')
-        const j2 = await res2.json().catch(() => ({}))
-        if (res2.ok && Array.isArray(j2.data)) {
-          const base = j2.data.slice(0, 6).map((s: any) => ({ 
-            id: s.space_id, 
-            name: s.space_name, 
-            distance: '', 
-            rate: s.cheapest_rate ?? 0, 
-            type: s.slot_type ?? 'Standard', 
-            total_slots: s.total_slots ?? 0, 
-            availability: s.total_slots ?? 0, 
-            nextFree: 'Now' 
-          }))
-          if (!ignore) {
-            setNearbySpaces(base)
-            // enrich availability/rate by fetching slots for each space
-            try {
-              const enriched = await Promise.all(base.map(async (sp: any) => {
-                try {
-                  const slotsRes = await fetch(`/api/slots?space_id=${encodeURIComponent(sp.id)}`)
-                  const slotsJson = await slotsRes.json().catch(() => ({}))
-                  if (slotsRes.ok && Array.isArray(slotsJson.data)) {
-                    const slots = slotsJson.data
-                    const availableCount = slots.filter((sl: any) => sl.is_available).length
-                    const cheapest = slots.reduce((acc: any, s: any) => (acc === null || (s.hourly_rate ?? 0) < (acc.hourly_rate ?? 0) ? s : acc), null)
-                    return { ...sp, availability: availableCount, rate: cheapest?.hourly_rate ?? sp.rate }
-                  }
-                } catch (e) {
-                  // ignore per-space failure
-                }
-                return sp
-              }))
-              if (!ignore) setNearbySpaces(enriched)
-            } catch (e) {
-              // ignore enrichment errors
-            }
-          }
+          }, (err) => {
+            console.warn('Geolocation error:', err)
+            // If geolocation fails, show empty state
+            if (!ignore) setNearbySpaces([])
+          }, { enableHighAccuracy: true })
+        } else {
+          // No geolocation support - show empty state with message
+          if (!ignore) setNearbySpaces([])
         }
       } catch (err) {
         console.warn('load spaces failed', err)
@@ -227,6 +208,14 @@ export default function DriverDashboard() {
 
   return (
     <main className="min-h-screen bg-background">
+      {!checkedAuth ? (
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Loading...</p>
+          </div>
+        </div>
+      ) : (
       <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Welcome Section */}
         <div className="mb-8">
@@ -239,7 +228,7 @@ export default function DriverDashboard() {
           <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground rounded-xl p-8 mb-8">
             <div className="flex items-start justify-between mb-6">
               <div>
-                <p className="text-sm font-semibold opacity-90">Current Booking</p>
+                <p className="text-sm font-semibold opacity-90">Current Booking </p>
                 <h3 className="text-2xl font-bold mt-1">{currentBooking.space}</h3>
               </div>
               <div className="text-4xl font-bold">₹{currentBooking.amount}</div>
@@ -249,12 +238,12 @@ export default function DriverDashboard() {
               <div>
                 <p className="text-xs opacity-75">Duration</p>
                 <p className="font-semibold">
-                  {currentBooking.startTime} - {currentBooking.endTime}
+                  {currentBooking.startTime && currentBooking.startTime !== 'Invalid Date' ? currentBooking.startTime : '00:00'} - {currentBooking.endTime && currentBooking.endTime !== 'Invalid Date' ? currentBooking.endTime : '00:00'}
                 </p>
               </div>
               <div>
                 <p className="text-xs opacity-75">Date</p>
-                <p className="font-semibold">{currentBooking.date}</p>
+                <p className="font-semibold">{currentBooking.date || 'N/A'}</p>
               </div>
               <div>
                 <p className="text-xs opacity-75">Status</p>
@@ -263,7 +252,50 @@ export default function DriverDashboard() {
             </div>
 
             <div className="flex gap-3">
-              <Button size="sm" variant="secondary" className="gap-2">
+              <Button 
+                size="sm" 
+                variant="secondary" 
+                className="gap-2"
+                onClick={() => {
+                  const lat = currentBooking.rawData?.parking_spaces?.latitude
+                  const lng = currentBooking.rawData?.parking_spaces?.longitude
+                  const spaceName = currentBooking.rawData?.parking_spaces?.space_name
+                  
+                  if (lat && lng) {
+                    // Get current location and open directions
+                    if ('geolocation' in navigator) {
+                      navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                          const currentLat = position.coords.latitude
+                          const currentLng = position.coords.longitude
+                          // Open Google Maps with directions from current location to destination
+                          window.open(
+                            `https://www.google.com/maps/dir/${currentLat},${currentLng}/${lat},${lng}`,
+                            '_blank'
+                          )
+                        },
+                        (error) => {
+                          // If location access denied, open without origin
+                          console.warn('Geolocation error:', error)
+                          window.open(
+                            `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=${encodeURIComponent(spaceName || 'Parking Location')}`,
+                            '_blank'
+                          )
+                        },
+                        { enableHighAccuracy: true, timeout: 5000 }
+                      )
+                    } else {
+                      // Browser doesn't support geolocation
+                      window.open(
+                        `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`,
+                        '_blank'
+                      )
+                    }
+                  } else {
+                    alert('Location not available for navigation')
+                  }
+                }}
+              >
                 <Navigation className="w-4 h-4" />
                 Navigate
               </Button>
@@ -271,6 +303,7 @@ export default function DriverDashboard() {
                 size="sm"
                 variant="outline"
                 className="gap-2 border-primary-foreground/30 text-primary-foreground hover:bg-primary-foreground/10 bg-transparent"
+                onClick={() => setDetailsModalBooking(currentBooking)}
               >
                 View Details
               </Button>
@@ -295,20 +328,36 @@ export default function DriverDashboard() {
             </Link>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            {nearbySpaces.map((space) => (
-              <div
-                key={space.id}
-                className="bg-card border border-border rounded-lg p-6 hover:border-primary transition-colors"
-              >
-                <div className="flex items-start justify-between mb-4">
-                  <div>
-                    <h4 className="font-bold text-foreground">{space.name}</h4>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                      <MapPin className="w-3 h-3" />
-                      {space.distance}
-                    </p>
-                  </div>
+          {loadingSpaces ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground">Loading nearby spaces...</p>
+            </div>
+          ) : nearbySpaces.length === 0 ? (
+            <div className="bg-card border border-border rounded-lg p-8 text-center">
+              <MapPin className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+              <p className="text-lg font-semibold text-foreground mb-2">No parking spaces within 200m</p>
+              <p className="text-sm text-muted-foreground mb-4">
+                Enable location access to find nearby parking or view the map to explore all available spaces.
+              </p>
+              <Link href="/driver/map">
+                <Button>View All Parking Spaces</Button>
+              </Link>
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-6">
+              {nearbySpaces.map((space) => (
+                <div
+                  key={space.id}
+                  className="bg-card border border-border rounded-lg p-6 hover:border-primary transition-colors"
+                >
+                  <div className="flex items-start justify-between mb-4">
+                    <div>
+                      <h4 className="font-bold text-foreground">{space.name}</h4>
+                      <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                        <MapPin className="w-3 h-3" />
+                        {space.distance}
+                      </p>
+                    </div>
                   <div className="text-right">
                     <p className="text-xl font-bold text-primary">₹{space.rate}</p>
                     <p className="text-xs text-muted-foreground">per hour</p>
@@ -337,33 +386,120 @@ export default function DriverDashboard() {
                 )}
               </div>
             ))}
-          </div>
+            </div>
+          )}
         </div>
 
-        {/* Past Bookings */}
+        {/* Recent Bookings - 3 Column Grid */}
         <div>
           <h3 className="text-xl font-bold text-foreground mb-6">Recent Bookings</h3>
-          <div className="space-y-3">
-            {pastBookings.map((booking) => (
-              <div
-                key={booking.id}
-                className="bg-card border border-border rounded-lg p-4 flex items-center justify-between hover:bg-muted transition-colors"
-              >
-                <div className="flex-1">
-                  <p className="font-semibold text-foreground">{booking.space}</p>
-                  <p className="text-sm text-muted-foreground">
-                    {booking.date} • {booking.startTime}-{booking.endTime}
-                  </p>
+          {loadingBookings ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground">Loading bookings...</p>
+            </div>
+          ) : bookings.length === 0 ? (
+            <div className="bg-card border border-border rounded-lg p-8 text-center">
+              <p className="text-lg font-semibold text-foreground mb-2">No bookings yet</p>
+              <p className="text-sm text-muted-foreground">Your booking history will appear here</p>
+            </div>
+          ) : (
+            <div className="grid md:grid-cols-3 gap-6">
+              {bookings.map((booking) => (
+                <div
+                  key={booking.id}
+                  className="bg-card border border-border rounded-lg p-6 hover:shadow-lg transition-shadow"
+                >
+                  {/* Status Badge */}
+                  <div className="flex items-center justify-between mb-4">
+                    <span className={`text-xs font-semibold px-3 py-1 rounded-full ${
+                      booking.status === 'active' ? 'bg-green-100 text-green-700' :
+                      booking.status === 'upcoming' ? 'bg-blue-100 text-blue-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {booking.status === 'active' ? '🟢 Active' : 
+                       booking.status === 'upcoming' ? '🔵 Upcoming' : 
+                       '⚪ Completed'}
+                    </span>
+                    <p className="text-sm font-bold text-primary">₹{booking.amount}</p>
+                  </div>
+
+                  {/* Space Info */}
+                  <div className="mb-4">
+                    <h4 className="font-bold text-foreground text-lg mb-1">{booking.space}</h4>
+                    <p className="text-sm text-muted-foreground">
+                      {booking.date}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      {booking.startTime} - {booking.endTime}
+                    </p>
+                  </div>
+
+                  {/* Entry OTP Section - Only for active/upcoming */}
+                  {(booking.status === 'active' || booking.status === 'upcoming') && (
+                    <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-4 mb-4">
+                      <p className="text-xs font-semibold text-muted-foreground mb-2">Entry OTP</p>
+                      <div className="flex items-center gap-2">
+                        <code className="text-2xl font-bold tracking-wider text-primary bg-white px-3 py-2 rounded border-2 border-dashed border-primary flex-1 text-center">
+                          {booking.rawData?.otp_entry || '------'}
+                        </code>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        Show this code to parking staff
+                      </p>
+                    </div>
+                  )}
+
+                  {/* QR Code Section - Only for active/upcoming */}
+                  {(booking.status === 'active' || booking.status === 'upcoming') && (
+                    <div className="bg-white rounded-lg p-4 border border-border">
+                      <p className="text-xs font-semibold text-muted-foreground mb-3 text-center">
+                        QR Code
+                      </p>
+                      <div className="bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center aspect-square">
+                        <div className="text-center text-muted-foreground">
+                          <svg 
+                            className="w-32 h-32 mx-auto mb-2" 
+                            viewBox="0 0 100 100" 
+                            fill="currentColor"
+                          >
+                            <rect x="0" y="0" width="45" height="45" />
+                            <rect x="55" y="0" width="45" height="45" />
+                            <rect x="0" y="55" width="45" height="45" />
+                            <rect x="65" y="65" width="15" height="15" />
+                            <rect x="85" y="65" width="15" height="15" />
+                            <rect x="65" y="85" width="15" height="15" />
+                            <rect x="85" y="85" width="15" height="15" />
+                          </svg>
+                          <p className="text-xs">Scan to verify</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Action Button */}
+                  <Button 
+                    variant="outline" 
+                    className="w-full mt-4"
+                    size="sm"
+                    onClick={() => setDetailsModalBooking(booking)}
+                  >
+                    View Details
+                  </Button>
                 </div>
-                <div className="text-right">
-                  <p className="font-bold text-foreground">₹{booking.amount}</p>
-                  <p className="text-xs text-muted-foreground capitalize">Completed</p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
+        
+        {/* Booking Details Modal */}
+        {detailsModalBooking && (
+          <BookingDetailsModal
+            booking={detailsModalBooking}
+            onClose={() => setDetailsModalBooking(null)}
+          />
+        )}
       </div>
+      )}
     </main>
   )
 }

@@ -18,7 +18,7 @@ import { setSessionCookie } from '@/lib/session'
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { email, password, fullName, phone, userType } = body
+    const { email, password, fullName, phone, userType, licenseNumber, plateNumber, panNumber } = body
 
     // Validation
     if (!email || !password || !fullName || !userType) {
@@ -55,6 +55,16 @@ export async function POST(req: NextRequest) {
         { error: 'Invalid user type. Must be "driver" or "owner"' },
         { status: 400 }
       )
+    }
+
+    // For drivers, require all 3 documents
+    if (userType === 'driver') {
+      if (!licenseNumber || !plateNumber || !panNumber) {
+        return NextResponse.json(
+          { error: 'Drivers must provide license number, plate number, and PAN ID' },
+          { status: 400 }
+        )
+      }
     }
 
     // Check if user already exists
@@ -95,11 +105,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // If driver, create empty driver profile
+    // If driver, create driver profile with documents
     if (userType === 'driver') {
       const { error: profileError } = await supabaseAdmin
         .from('driver_profiles')
-        .insert({ user_id: newUser.user_id })
+        .insert({ 
+          user_id: newUser.user_id,
+          license_number: licenseNumber || null,
+          plate_number: plateNumber || null,
+          pan_card_number: panNumber || null,
+        })
 
       if (profileError) {
         console.error('Error creating driver profile:', profileError)
