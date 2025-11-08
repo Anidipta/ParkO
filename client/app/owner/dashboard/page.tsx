@@ -317,13 +317,7 @@ export default function OwnerDashboard() {
                     <Link href={`/owner/space/${space.id}`} className="flex-1">
                       <Button variant="outline" size="sm" className="w-full gap-2 bg-transparent">
                         <Edit2 className="w-4 h-4" />
-                        Manage
-                      </Button>
-                    </Link>
-                    <Link href={`/owner/space/${space.id}?map=1`}>
-                      <Button variant="outline" size="sm" className="gap-2 bg-transparent">
-                        <MapPin className="w-4 h-4" />
-                        View Map
+                        Manage Space
                       </Button>
                     </Link>
                   </div>

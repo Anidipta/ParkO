@@ -17,7 +17,7 @@ type ParkingSpace = {
 
 type AvailabilityMap = Record<string, { available: number; total: number }>
 
-export default function MapClient({ userPos, spaces, availability }: { userPos: { lat: number; lng: number } | null; spaces: ParkingSpace[]; availability?: AvailabilityMap }) {
+export default function MapClient({ userPos, spaces, availability, onSelect }: { userPos: { lat: number; lng: number } | null; spaces: ParkingSpace[]; availability?: AvailabilityMap; onSelect?: (space: ParkingSpace) => void }) {
   const center = userPos ? [userPos.lat, userPos.lng] : [20.5937, 78.9629]
 
   // choose an icon at runtime: prefer /loc.png if it exists, otherwise fallback to /logo.png
@@ -31,6 +31,10 @@ export default function MapClient({ userPos, spaces, availability }: { userPos: 
 
   // @ts-ignore - leaflet Icon may be untyped in this workspace
   const userIcon = new L.Icon({ iconUrl, iconSize: [36, 36], iconAnchor: [18, 36] })
+
+  // react-leaflet typings in this workspace can be fragile; use any aliases when necessary to avoid TS complaints
+  const AnyCircle: any = Circle as any
+  const AnyMarker: any = Marker as any
 
   function RecenterEffect({ latlng }: { latlng: [number, number] | null }) {
     const map = useMap()
@@ -76,20 +80,25 @@ export default function MapClient({ userPos, spaces, availability }: { userPos: 
 
         return (
           // @ts-ignore
-          <CircleMarker key={s.space_id} center={[Number(s.latitude), Number(s.longitude)]} radius={6} pathOptions={{ color: stroke, fillColor: fill, fillOpacity }}>
-          <Popup>
-            <div className="text-sm">
-              <div className="font-semibold">{s.space_name}</div>
-              <div className="text-xs">{s.address}</div>
-              <div className="text-xs">Slots: {s.total_slots}</div>
-              {availability?.[s.space_id] ? (
-                <div className="text-xs">Available: {availability[s.space_id].available}/{availability[s.space_id].total}</div>
-              ) : null}
-              <div className="mt-2">
-                <a href={`/driver/booking/${s.space_id}`} className="inline-block px-3 py-1 rounded bg-primary text-primary-foreground text-sm">Book Now</a>
+          <CircleMarker
+            key={s.space_id}
+            center={[Number(s.latitude), Number(s.longitude)]}
+            pathOptions={{ color: stroke, fillColor: fill, fillOpacity }}
+            eventHandlers={{ click: () => { if (onSelect) onSelect(s) } }}
+          >
+            <Popup>
+              <div className="text-sm">
+                <div className="font-semibold">{s.space_name}</div>
+                <div className="text-xs">{s.address}</div>
+                <div className="text-xs">Slots: {s.total_slots}</div>
+                {availability?.[s.space_id] ? (
+                  <div className="text-xs">Available: {availability[s.space_id].available}/{availability[s.space_id].total}</div>
+                ) : null}
+                <div className="mt-2">
+                  <a href={`/driver/booking/${s.space_id}`} className="inline-block px-3 py-1 rounded bg-primary text-primary-foreground text-sm">Book Now</a>
+                </div>
               </div>
-            </div>
-          </Popup>
+            </Popup>
           </CircleMarker>
         )
       })}
@@ -98,15 +107,12 @@ export default function MapClient({ userPos, spaces, availability }: { userPos: 
       {userPos && (
         <>
           <RecenterEffect latlng={[userPos.lat, userPos.lng]} />
-          {/* @ts-ignore - Circle typing may vary */}
-          <Circle center={[userPos.lat, userPos.lng]} radius={100} pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 0.08 }} />
-          {/* @ts-ignore */}
-          <Circle center={[userPos.lat, userPos.lng]} radius={200} pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.06 }} />
-          {/* @ts-ignore */}
-          <Circle center={[userPos.lat, userPos.lng]} radius={300} pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.04 }} />
-          {/* show custom icon marker for user location; @ts-ignore for types */}
-          {/* @ts-ignore */}
-          <Marker position={[userPos.lat, userPos.lng]} icon={userIcon} />
+          {/* Distance rings: green (200m), yellow (450m), red (800m) */}
+          <AnyCircle center={[userPos.lat, userPos.lng]} radius={200} pathOptions={{ color: '#10b981', fillColor: '#10b981', fillOpacity: 0.08, weight: 2 }} />
+          <AnyCircle center={[userPos.lat, userPos.lng]} radius={450} pathOptions={{ color: '#f59e0b', fillColor: '#f59e0b', fillOpacity: 0.06, weight: 2 }} />
+          <AnyCircle center={[userPos.lat, userPos.lng]} radius={800} pathOptions={{ color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.04, weight: 2 }} />
+          {/* show custom icon marker for user location */}
+          <AnyMarker position={[userPos.lat, userPos.lng]} icon={userIcon} />
         </>
       )}
     </MapContainer>

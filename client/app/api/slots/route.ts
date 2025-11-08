@@ -38,3 +38,22 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: String(err) }), { status: 500 })
   }
 }
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { slot_id, hourly_rate, is_available, slot_type } = body
+    if (!slot_id) return new Response(JSON.stringify({ error: 'slot_id required' }), { status: 400 })
+
+    const updates: any = {}
+    if (hourly_rate != null) updates.hourly_rate = hourly_rate
+    if (is_available != null) updates.is_available = is_available
+    if (slot_type) updates.slot_type = slot_type
+
+    const { data, error } = await supabaseAdmin.from('parking_slots').update(updates).eq('slot_id', slot_id).select().single()
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500 })
+  }
+}

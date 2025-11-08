@@ -33,6 +33,7 @@ export default function DriverDashboard() {
   const [checkedAuth, setCheckedAuth] = useState(false)
   const [role, setRole] = useState<string | null>(null)
   const [authUserId, setAuthUserId] = useState<string | null>(null)
+  const [driverProfile, setDriverProfile] = useState<any | null>(null)
   const router = useRouter()
 
   // run an initial auth check. If there's no session, redirect to driver signup.
@@ -120,6 +121,25 @@ export default function DriverDashboard() {
     return () => { ignore = true }
   }, [checkedAuth, authUserId])
 
+  // fetch driver profile after auth check
+  useEffect(() => {
+    if (!checkedAuth || !authUserId) return
+    let ignore = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/users/profile?user_id=${encodeURIComponent(authUserId)}`)
+        if (!res.ok) return
+        const j = await res.json().catch(() => ({}))
+        if (res.ok && j.data) {
+          if (!ignore) setDriverProfile(j.data)
+        }
+      } catch (err) {
+        console.warn('failed to load driver profile', err)
+      }
+    })()
+    return () => { ignore = true }
+  }, [checkedAuth, authUserId])
+
   // fetch nearby spaces using geolocation then fallback to /api/parking
   useEffect(() => {
     let ignore = false
@@ -158,16 +178,40 @@ export default function DriverDashboard() {
         const res2 = await fetch('/api/parking')
         const j2 = await res2.json().catch(() => ({}))
         if (res2.ok && Array.isArray(j2.data)) {
-          const mapped = j2.data.slice(0, 6).map((s: any) => ({ 
+          const base = j2.data.slice(0, 6).map((s: any) => ({ 
             id: s.space_id, 
             name: s.space_name, 
             distance: '', 
             rate: s.cheapest_rate ?? 0, 
             type: s.slot_type ?? 'Standard', 
+            total_slots: s.total_slots ?? 0, 
             availability: s.total_slots ?? 0, 
             nextFree: 'Now' 
           }))
-          if (!ignore) setNearbySpaces(mapped)
+          if (!ignore) {
+            setNearbySpaces(base)
+            // enrich availability/rate by fetching slots for each space
+            try {
+              const enriched = await Promise.all(base.map(async (sp: any) => {
+                try {
+                  const slotsRes = await fetch(`/api/slots?space_id=${encodeURIComponent(sp.id)}`)
+                  const slotsJson = await slotsRes.json().catch(() => ({}))
+                  if (slotsRes.ok && Array.isArray(slotsJson.data)) {
+                    const slots = slotsJson.data
+                    const availableCount = slots.filter((sl: any) => sl.is_available).length
+                    const cheapest = slots.reduce((acc: any, s: any) => (acc === null || (s.hourly_rate ?? 0) < (acc.hourly_rate ?? 0) ? s : acc), null)
+                    return { ...sp, availability: availableCount, rate: cheapest?.hourly_rate ?? sp.rate }
+                  }
+                } catch (e) {
+                  // ignore per-space failure
+                }
+                return sp
+              }))
+              if (!ignore) setNearbySpaces(enriched)
+            } catch (e) {
+              // ignore enrichment errors
+            }
+          }
         }
       } catch (err) {
         console.warn('load spaces failed', err)
@@ -282,11 +326,15 @@ export default function DriverDashboard() {
                   )}
                 </div>
 
-                <Link href={`/driver/booking/${space.id}`}>
-                  <Button className="w-full" size="sm">
-                    Book Now
-                  </Button>
-                </Link>
+                {driverProfile && (!driverProfile.license_number || !driverProfile.plate_number || !driverProfile.pan_card_number) ? (
+                  <Link href="/driver/verification">
+                    <Button className="w-full" size="sm">Verify to Book</Button>
+                  </Link>
+                ) : (
+                  <Link href={`/driver/booking/${space.id}`}>
+                    <Button className="w-full" size="sm">Book Now</Button>
+                  </Link>
+                )}
               </div>
             ))}
           </div>

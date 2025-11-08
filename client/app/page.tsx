@@ -23,9 +23,27 @@ export default function Home() {
   const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null)
   const [coordsText, setCoordsText] = useState<string>('')
   const [spaces, setSpaces] = useState<ParkingSpace[]>([])
-  // dynamic client map component (SSG/SSR-safe)
   const MapClient = dynamic(() => import('@/components/map-client').then(mod => mod.default), { ssr: false })
   const isClient = typeof window !== 'undefined'
+  const [userRole, setUserRole] = useState<string | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/session', { credentials: 'include' })
+        if (!mounted) return
+        if (!res.ok) return
+        const j = await res.json()
+        const user = j?.user
+        const role = user?.user_type ?? user?.userType ?? null
+        if (mounted) setUserRole(role)
+      } catch (e) {
+        // ignore
+      }
+    })()
+    return () => { mounted = false }
+  }, [])
 
   const watchId = useRef<number | null>(null)
 
@@ -101,10 +119,10 @@ export default function Home() {
             maximizing revenue.
           </p>
           <div className="flex items-center justify-center md:justify-start gap-4">
-            <Link href="/driver/signup">
+            <Link href={userRole === 'driver' ? '/driver/dashboard' : '/driver/signup'}>
               <Button size="lg" className="btn-elevated">For Drivers</Button>
             </Link>
-            <Link href="/owner/signup">
+            <Link href={userRole === 'owner' || userRole === 'manager' ? '/owner/dashboard' : '/owner/signup'}>
               <Button variant="ghost" size="lg" className="text-foreground/90">For Owners</Button>
             </Link>
           </div>
@@ -161,9 +179,9 @@ export default function Home() {
           <aside className="bg-card p-4 rounded-lg card-border">
             <h4 className="text-lg font-semibold text-foreground mb-2">Legend & Nearby</h4>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-green-500/80"></span>Within 150m — preferred</li>
-              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-yellow-400/80"></span>150–200m — nearby</li>
-              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-red-500/80"></span>200–300m — far</li>
+              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-green-500/80"></span>Within 200m — preferred</li>
+              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-yellow-400/80"></span>200–450m — nearby</li>
+              <li><span className="inline-block w-4 h-4 mr-2 align-middle rounded-full bg-red-500/80"></span>450–800m — far</li>
             </ul>
 
             <div className="mt-4">

@@ -18,12 +18,34 @@ export default function AddParkingSpace() {
     capacity: "50",
     type: "standard",
     ratePerHour: "60",
-    specialSlots: "",
     location: "Current Location",
     address: "",
     lat: "",
     lng: "",
   })
+
+  // Special slots state
+  const [specialSlotTypes, setSpecialSlotTypes] = useState<string[]>([])
+  const [slotCounts, setSlotCounts] = useState<Record<string, number>>({
+    near_gate: 0,
+    disabled: 0,
+    women_only: 0,
+    ev_charging: 0,
+    premium: 0,
+    compact: 0,
+  })
+
+  const availableSpecialTypes = [
+    { value: 'disabled', label: 'Disabled/Accessible' },
+    { value: 'women_only', label: 'Women Only' },
+    { value: 'ev_charging', label: 'EV Charging' },
+    { value: 'premium', label: 'Premium/VIP' },
+    { value: 'compact', label: 'Compact Cars' },
+  ]
+
+  const totalCapacity = Number(formData.capacity || 0)
+  const specialSlotsTotal = Object.values(slotCounts).reduce((sum, count) => sum + count, 0)
+  const normalSlotsCount = Math.max(0, totalCapacity - specialSlotsTotal)
 
   const [userPos, setUserPos] = useState<{ lat: number; lng: number } | null>(null)
   useEffect(() => {
@@ -53,6 +75,21 @@ export default function AddParkingSpace() {
     }
   }
 
+  // Reverse geocode when clicking on map
+  const handleMapClick = async (lat: number, lng: number) => {
+    setFormData(prev => ({ ...prev, lat: String(lat), lng: String(lng) }))
+    
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}`, { headers: { 'Accept': 'application/json' } })
+      const j = await res.json()
+      if (j.display_name) {
+        setFormData(prev => ({ ...prev, address: j.display_name }))
+      }
+    } catch (e) {
+      console.warn('Reverse geocoding failed:', e)
+    }
+  }
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target
     setFormData((prev) => ({ ...prev, [name]: value }))
@@ -62,28 +99,116 @@ export default function AddParkingSpace() {
     if (step < 3) setStep(step + 1)
   }
 
+  const handleSpecialTypeToggle = (type: string) => {
+    if (specialSlotTypes.includes(type)) {
+      setSpecialSlotTypes(prev => prev.filter(t => t !== type))
+      setSlotCounts(prev => ({ ...prev, [type]: 0 }))
+    } else {
+      setSpecialSlotTypes(prev => [...prev, type])
+    }
+  }
+
+  const handleSlotCountChange = (type: string, count: number) => {
+    const newCount = Math.max(0, Math.min(count, totalCapacity))
+    setSlotCounts(prev => ({ ...prev, [type]: newCount }))
+  }
+
   const handleCreate = async () => {
     try {
-  const sess = await fetch('/api/auth/session').then(r => r.json()).catch(() => null)
-  const owner_id = sess?.user?.userId
+      // Validation
+      if (specialSlotsTotal > totalCapacity) {
+        alert('Special slots allocation exceeds total capacity. Please adjust the numbers.')
+        return
+      }
+
+      const sess = await fetch('/api/auth/session').then(r => r.json()).catch(() => null)
+      const owner_id = sess?.user?.userId
       if (!owner_id) {
         alert('Please login as owner to create a space')
         return
       }
+      
       const payload = {
         owner_id,
         space_name: formData.spaceName.trim() || 'My Parking Space',
         address: formData.address,
         latitude: formData.lat ? Number(formData.lat) : (userPos?.lat ?? null),
         longitude: formData.lng ? Number(formData.lng) : (userPos?.lng ?? null),
-        total_slots: Number(formData.capacity || 0),
+        total_slots: totalCapacity,
         hourly_rate: Number(formData.ratePerHour || 0),
       }
+      
       const res = await fetch('/api/parking', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
       if (!res.ok) {
         const j = await res.json().catch(() => ({}))
         throw new Error(j?.error || `Failed (${res.status})`)
       }
+      
+      const created = await res.json()
+      const spaceId = created.data?.[0]?.space_id || created.data?.space_id
+      
+      if (!spaceId) {
+        throw new Error('Space created but ID not returned')
+      }
+
+      // Create slots for each type
+      const slotPromises: Promise<any>[] = []
+      
+      // Normal slots
+      for (let i = 1; i <= normalSlotsCount; i++) {
+        slotPromises.push(
+          fetch('/api/slots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              space_id: spaceId,
+              slot_number: `N${i}`,
+              slot_type: 'standard',
+              hourly_rate: Number(formData.ratePerHour || 0),
+            })
+          })
+        )
+      }
+      
+      // Near gate slots
+      for (let i = 1; i <= slotCounts.near_gate; i++) {
+        slotPromises.push(
+          fetch('/api/slots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              space_id: spaceId,
+              slot_number: `G${i}`,
+              slot_type: 'near_gate',
+              hourly_rate: Number(formData.ratePerHour || 0),
+            })
+          })
+        )
+      }
+      
+      // Special slot types
+      for (const type of specialSlotTypes) {
+        const count = slotCounts[type]
+        for (let i = 1; i <= count; i++) {
+          const prefix = type.charAt(0).toUpperCase()
+          slotPromises.push(
+            fetch('/api/slots', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                space_id: spaceId,
+                slot_number: `${prefix}${i}`,
+                slot_type: type,
+                hourly_rate: Number(formData.ratePerHour || 0),
+              })
+            })
+          )
+        }
+      }
+      
+      // Wait for all slots to be created
+      await Promise.all(slotPromises)
+      
       window.location.href = '/owner/dashboard'
     } catch (err: any) {
       alert(err.message || 'Failed to create')
@@ -160,9 +285,9 @@ export default function AddParkingSpace() {
             </div>
           )}
 
-          {/* Step 2: Pricing */}
+          {/* Step 2: Pricing & Slots */}
           {step === 2 && (
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div>
                 <label className="text-sm font-semibold text-foreground mb-2 block">Rate per Hour (₹)</label>
                 <Input
@@ -174,17 +299,94 @@ export default function AddParkingSpace() {
                   className="w-full"
                 />
               </div>
-              <div>
-                <label className="text-sm font-semibold text-foreground mb-2 block">Special Slots (Optional)</label>
-                <Input
-                  name="specialSlots"
-                  value={formData.specialSlots}
-                  onChange={handleChange}
-                  placeholder="e.g., Disabled, Women-only, Electric vehicle charging"
-                  className="w-full"
-                />
-                <p className="text-xs text-muted-foreground mt-1">Comma-separated</p>
+
+              {/* Special Slots Configuration */}
+              <div className="border border-border rounded-lg p-4 bg-muted/30">
+                <label className="text-sm font-semibold text-foreground mb-3 block">Special Slots (Optional)</label>
+                
+                {/* Multi-select special slot types */}
+                <div className="space-y-2 mb-4">
+                  {availableSpecialTypes.map(type => (
+                    <label key={type.value} className="flex items-center gap-2 cursor-pointer p-2 hover:bg-muted/50 rounded">
+                      <input
+                        type="checkbox"
+                        checked={specialSlotTypes.includes(type.value)}
+                        onChange={() => handleSpecialTypeToggle(type.value)}
+                        className="w-4 h-4 rounded border-border"
+                      />
+                      <span className="text-sm text-foreground">{type.label}</span>
+                    </label>
+                  ))}
+                </div>
+
+                {/* Slot count inputs in 3 columns */}
+                <div className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-border">
+                  {/* Normal slots (non-editable, calculated) */}
+                  <div className="bg-card border border-border rounded-lg p-3">
+                    <label className="text-xs text-muted-foreground block mb-1">Normal Slots</label>
+                    <input
+                      type="number"
+                      value={normalSlotsCount}
+                      readOnly
+                      className="w-full px-2 py-1 text-sm font-semibold bg-muted border border-border rounded text-center cursor-not-allowed"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1 text-center">Auto-calculated</p>
+                  </div>
+
+                  {/* Near Gate slots */}
+                  <div className="bg-card border border-border rounded-lg p-3">
+                    <label className="text-xs text-muted-foreground block mb-1">Near Gate</label>
+                    <input
+                      type="number"
+                      value={slotCounts.near_gate}
+                      onChange={(e) => handleSlotCountChange('near_gate', Number(e.target.value))}
+                      min="0"
+                      max={totalCapacity}
+                      className="w-full px-2 py-1 text-sm font-semibold border border-border rounded text-center"
+                    />
+                  </div>
+
+                  {/* Selected special slot types */}
+                  {specialSlotTypes.map(type => (
+                    <div key={type} className="bg-card border border-primary/30 rounded-lg p-3">
+                      <label className="text-xs text-muted-foreground block mb-1">
+                        {availableSpecialTypes.find(t => t.value === type)?.label}
+                      </label>
+                      <input
+                        type="number"
+                        value={slotCounts[type]}
+                        onChange={(e) => handleSlotCountChange(type, Number(e.target.value))}
+                        min="0"
+                        max={totalCapacity}
+                        className="w-full px-2 py-1 text-sm font-semibold border border-border rounded text-center"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Slot allocation summary */}
+                <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                  <p className="text-sm font-semibold text-blue-900 mb-2">Slot Allocation Summary</p>
+                  <div className="text-xs text-blue-800 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Total Capacity:</span>
+                      <span className="font-semibold">{totalCapacity}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Special Slots:</span>
+                      <span className="font-semibold">{specialSlotsTotal}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-blue-300 pt-1">
+                      <span>Normal Slots:</span>
+                      <span className="font-semibold">{normalSlotsCount}</span>
+                    </div>
+                  </div>
+                  {specialSlotsTotal > totalCapacity && (
+                    <p className="text-xs text-red-600 mt-2 font-semibold">⚠️ Special slots exceed total capacity!</p>
+                  )}
+                </div>
               </div>
+
               <div className="bg-secondary/10 border border-secondary/20 rounded-lg p-4">
                 <p className="text-sm text-foreground font-semibold mb-2">Estimated Monthly Revenue</p>
                 <p className="text-2xl font-bold text-secondary">
@@ -209,7 +411,10 @@ export default function AddParkingSpace() {
                   <MapPin className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
                   <div>
                     <p className="font-semibold text-blue-900 text-sm">Pinpoint Your Parking Location</p>
-                    <p className="text-xs text-blue-800 mt-1">Search an address or drag the marker on the map. Your current GPS is shown in red.</p>
+                    <p className="text-xs text-blue-800 mt-1">
+                      <strong>Click anywhere on the map</strong> to set location, search an address, or drag the marker. 
+                      Your current GPS is shown in red.
+                    </p>
                   </div>
                 </div>
                 <div className="mt-3 flex gap-2">
@@ -217,9 +422,9 @@ export default function AddParkingSpace() {
                   <Button type="button" onClick={searchAddress} disabled={searching}>Search</Button>
                 </div>
                 {searchResults.length > 0 && (
-                  <div className="mt-2 bg-white border border-border rounded">
+                  <div className="mt-2 bg-white border border-border rounded max-h-48 overflow-y-auto">
                     {searchResults.map((r, idx) => (
-                      <button key={idx} className="w-full text-left px-3 py-2 text-sm hover:bg-muted"
+                      <button key={idx} className="w-full text-left px-3 py-2 text-sm hover:bg-muted border-b last:border-b-0"
                         onClick={() => {
                           setFormData(prev => ({ ...prev, address: r.display_name, lat: String(r.lat), lng: String(r.lon) }))
                           setSearchResults([])
@@ -244,7 +449,7 @@ export default function AddParkingSpace() {
                 {typeof window !== 'undefined' && (
                   <LocationPicker
                     value={formData.lat && formData.lng ? { lat: Number(formData.lat), lng: Number(formData.lng) } : null}
-                    onChange={(ll) => setFormData(prev => ({ ...prev, lat: String(ll.lat), lng: String(ll.lng) }))}
+                    onChange={(ll) => handleMapClick(ll.lat, ll.lng)}
                     userPos={userPos}
                     height={360}
                   />

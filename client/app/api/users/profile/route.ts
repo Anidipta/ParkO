@@ -1,6 +1,21 @@
 import type { NextRequest } from 'next/server'
 import supabaseAdmin from '@/lib/supabaseServer'
 
+export async function GET(req: NextRequest) {
+  try {
+    const url = new URL(req.url)
+    const user_id = url.searchParams.get('user_id')
+    if (!user_id) return new Response(JSON.stringify({ error: 'user_id required' }), { status: 400 })
+
+    const { data, error } = await supabaseAdmin.from('driver_profiles').select('*').eq('user_id', user_id).single()
+    if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+
+    return new Response(JSON.stringify({ data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500 })
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -47,6 +62,29 @@ export async function POST(req: NextRequest) {
     if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
 
     return new Response(JSON.stringify({ data }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  } catch (err: any) {
+    return new Response(JSON.stringify({ error: String(err) }), { status: 500 })
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = await req.json()
+    const { user_id, full_name, phone } = body
+    if (!user_id) return new Response(JSON.stringify({ error: 'user_id required' }), { status: 400 })
+
+    // Update user table fields
+    const updates: any = {}
+    if (full_name !== undefined) updates.full_name = full_name
+    if (phone !== undefined) updates.phone = phone
+
+    if (Object.keys(updates).length > 0) {
+      updates.updated_at = new Date().toISOString()
+      const { error } = await supabaseAdmin.from('users').update(updates).eq('user_id', user_id)
+      if (error) return new Response(JSON.stringify({ error: error.message }), { status: 500 })
+    }
+
+    return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
   } catch (err: any) {
     return new Response(JSON.stringify({ error: String(err) }), { status: 500 })
   }

@@ -75,8 +75,6 @@ export default function Header() {
         <nav className="hidden md:flex items-center gap-6">
           <Link href="/" className="text-sm text-foreground/80 hover:text-foreground">Home</Link>
           <Link href="/driver/map" className="text-sm text-foreground/80 hover:text-foreground">Map</Link>
-          <Link href="/owner/dashboard" className="text-sm text-foreground/80 hover:text-foreground">For Owners</Link>
-          <Link href="/driver/dashboard" className="text-sm text-foreground/80 hover:text-foreground">For Drivers</Link>
         </nav>
 
         <div className="hidden md:flex items-center gap-3">

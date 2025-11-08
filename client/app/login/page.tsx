@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import Link from 'next/link'
@@ -13,6 +13,29 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const router = useRouter()
+
+  // If already signed in, redirect to role dashboard
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/auth/session', { credentials: 'include' })
+        if (!mounted) return
+        if (!res.ok) return
+        const j = await res.json()
+        const user = j?.user
+        const role = user?.user_type ?? user?.userType ?? null
+        if (role === 'owner' || role === 'manager') {
+          router.replace('/owner/dashboard')
+        } else if (role === 'driver') {
+          router.replace('/driver/dashboard')
+        }
+      } catch (e) {
+        // ignore
+      }
+    })()
+    return () => { mounted = false }
+  }, [router])
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target

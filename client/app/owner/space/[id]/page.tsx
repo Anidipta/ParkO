@@ -15,6 +15,7 @@ interface Slot {
   number: string
   status: "available" | "occupied" | "maintenance"
   type: "standard" | "premium" | "disabled"
+  hourly_rate?: number
   currentBooking?: { driver: string; endTime: string }
 }
 
@@ -31,6 +32,8 @@ export default function SpaceManagement() {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [editRate, setEditRate] = useState(false)
   const [rate, setRate] = useState("60")
+  const [editingSlotId, setEditingSlotId] = useState<string | null>(null)
+  const [editingSlotRate, setEditingSlotRate] = useState("")
 
   const [spaceDetails, setSpaceDetails] = useState<any | null>(null)
   const [slots, setSlots] = useState<Slot[]>([])
@@ -76,6 +79,7 @@ export default function SpaceManagement() {
           number: slot.slot_number ?? String(slot.slot_id ?? ''),
           status: slot.is_available === true ? 'available' : slot.is_available === false ? 'occupied' : 'maintenance',
           type: slot.slot_type ?? 'standard',
+          hourly_rate: slot.hourly_rate ?? 0,
           currentBooking: undefined,
         }))
         setSlots(mapped)
@@ -144,6 +148,29 @@ export default function SpaceManagement() {
     }
   }
 
+  async function updateSlotRate(slotId: string, newRate: number) {
+    try {
+      const res = await fetch('/api/slots', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slot_id: slotId, hourly_rate: newRate })
+      })
+      const j = await res.json()
+      if (!res.ok) throw new Error(j.error || 'Failed to update rate')
+      
+      // Update local state
+      setSlots(prevSlots => prevSlots.map(slot => 
+        slot.id === slotId ? { ...slot, hourly_rate: newRate } : slot
+      ))
+      setEditingSlotId(null)
+      setEditingSlotRate("")
+      
+      toast({ title: 'Rate updated', description: `Slot ${slots.find(s => s.id === slotId)?.number} rate: ₹${newRate}/hr` })
+    } catch (err: any) {
+      alert(err.message || 'Failed to update rate')
+    }
+  }
+
   // load managers on tab open
   useEffect(() => { if (selectedTab === 'managers') loadManagers() }, [selectedTab])
 
@@ -162,6 +189,7 @@ export default function SpaceManagement() {
               number: slot.slot_number ?? String(slot.slot_id ?? ''),
               status: slot.is_available === true ? 'available' : slot.is_available === false ? 'occupied' : 'maintenance',
               type: slot.slot_type ?? 'standard',
+              hourly_rate: slot.hourly_rate ?? 0,
               currentBooking: undefined,
             }))
             const occ = mapped.filter((s) => s.status === 'occupied').length
@@ -356,13 +384,90 @@ export default function SpaceManagement() {
         {selectedTab === "slots" && (
           <div className="space-y-6">
             <div className="bg-card border border-border rounded-lg p-6">
-              <h3 className="font-bold text-foreground mb-4">Parking Slot Status</h3>
-              <div className="flex flex-wrap gap-2">
-                {slots.map((slot) => (
-                  <button key={slot.id} onClick={() => setSelectedSlot(slot)} title={`${slot.number} - ${slot.type} - ${slot.status}`} className={`px-2 py-1 text-xs rounded-full border ${slot.status === 'occupied' ? 'border-red-300 text-red-700' : slot.status === 'maintenance' ? 'border-yellow-300 text-yellow-700' : 'border-green-300 text-green-700'}`}>
-                    {slot.number}
-                  </button>
-                ))}
+              <h3 className="font-bold text-foreground mb-4">Parking Slot Management</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left py-2 px-3">Slot</th>
+                      <th className="text-left py-2 px-3">Type</th>
+                      <th className="text-left py-2 px-3">Status</th>
+                      <th className="text-left py-2 px-3">Rate (₹/hr)</th>
+                      <th className="text-left py-2 px-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {slots.map((slot) => (
+                      <tr key={slot.id} className="border-b border-border hover:bg-muted/50">
+                        <td className="py-3 px-3 font-medium">{slot.number}</td>
+                        <td className="py-3 px-3 capitalize">{slot.type}</td>
+                        <td className="py-3 px-3">
+                          <span className={`px-2 py-1 text-xs rounded-full ${
+                            slot.status === 'available' ? 'bg-green-100 text-green-700' :
+                            slot.status === 'maintenance' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {slot.status}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3">
+                          {editingSlotId === slot.id ? (
+                            <div className="flex gap-2 items-center">
+                              <input
+                                type="number"
+                                value={editingSlotRate}
+                                onChange={(e) => setEditingSlotRate(e.target.value)}
+                                className="w-24 px-2 py-1 border border-border rounded text-sm bg-background"
+                                autoFocus
+                              />
+                              <button
+                                onClick={() => {
+                                  const newRate = Number(editingSlotRate)
+                                  if (newRate > 0) {
+                                    updateSlotRate(slot.id, newRate)
+                                  }
+                                }}
+                                className="px-2 py-1 bg-primary text-primary-foreground rounded text-xs"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingSlotId(null)
+                                  setEditingSlotRate("")
+                                }}
+                                className="px-2 py-1 bg-muted text-foreground rounded text-xs"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold">₹{slot.hourly_rate ?? 0}</span>
+                              <button
+                                onClick={() => {
+                                  setEditingSlotId(slot.id)
+                                  setEditingSlotRate(String(slot.hourly_rate ?? 0))
+                                }}
+                                className="text-xs text-primary hover:underline"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <button
+                            onClick={() => setSelectedSlot(slot)}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            View Details
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
 
               {/* Legend */}
